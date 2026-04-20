@@ -39,16 +39,23 @@ die() { log_error "$*"; exit 1; }
 # Lowercase ASCII only, at least one dot, DNS-legal.
 # Wildcards and IDN/punycode labels intentionally rejected.
 
-fqdn_regex='^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'
-
 validate_fqdn() {
     local fqdn="$1"
+    # Regex is function-local so sourcing _lib.sh doesn't pollute the caller
+    # namespace with an `fqdn_regex` global.
+    local regex='^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'
     # Belt-and-suspenders: explicitly reject path-escape characters even though
     # the regex already excludes them. Defense-in-depth in case the regex is
     # ever loosened to allow e.g. wildcards — rm -rf paths are derived from
     # this value, so the check earns its keep.
-    [[ "$fqdn" != *".."* && "$fqdn" != *"/"* ]] && [[ "$fqdn" =~ $fqdn_regex ]]
+    [[ "$fqdn" != *".."* && "$fqdn" != *"/"* ]] && [[ "$fqdn" =~ $regex ]]
 }
+
+# --- Shared constants ------------------------------------------------------
+# Traefik service name that every generated per-site router references.
+# Must match the `services:` key in traefik/dynamic/_shared-services.yml.
+# If you rename the service, update both this constant AND the yaml.
+PORTAL_NGINX_SERVICE_NAME="nginx-backend"
 
 # --- Atomic file writes ----------------------------------------------------
 # Write stdin to <target> via a temp file on the same filesystem, then rename.
@@ -70,6 +77,7 @@ write_atomic() {
     cat > "$tmp"
     # mktemp creates the temp at 0600; apply umask so the final file matches
     # what a plain `cat > target` would have produced (typically 0644).
+    # Examples:  umask 022 -> chmod 644   |   umask 002 -> chmod 664
     chmod "$(printf '%o' $((0666 & ~0$(umask))))" "$tmp"
     mv "$tmp" "$target"
     trap - RETURN
@@ -90,8 +98,7 @@ acquire_portal_lock() {
     # releases automatically on exit.
     exec 9>"$lock_file"
     if ! flock -n 9; then
-        echo "another provision/deprovision is running — refusing to proceed" >&2
-        exit 1
+        die "another provision/deprovision is running — refusing to proceed"
     fi
 }
 

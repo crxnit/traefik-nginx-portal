@@ -94,6 +94,7 @@ fi
 
 # --- Generate cert + key ---------------------------------------------------
 
+expiry="unknown"
 REGENERATE_REASON=""
 if [[ -f "$CRT_FILE" && -f "$KEY_FILE" && "$FORCE" != "true" ]]; then
     expiry=$(openssl x509 -in "$CRT_FILE" -noout -enddate 2>/dev/null | cut -d= -f2 || echo "unknown")
@@ -174,7 +175,11 @@ fi
 
 # --- Gitignore reminder ----------------------------------------------------
 
-gitignore="${SCRIPT_DIR}/../../.gitignore"
+# Prefer `git rev-parse` over a hardcoded relative path so the check keeps
+# working if the repo is ever restructured; fall back to the old assumption
+# when git isn't available or the dir isn't a working tree.
+repo_root=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || echo "${SCRIPT_DIR}/../..")
+gitignore="${repo_root}/.gitignore"
 if [[ -f "$gitignore" ]] && ! grep -q 'traefik/certs' "$gitignore"; then
     log_warn "Private key lives under traefik/certs/ — consider adding to .gitignore:"
     echo "        srv/portal/traefik/certs/"

@@ -96,9 +96,9 @@ is_excluded() {
 # From nginx conf.d/
 if [[ -d "$CONF_D" ]]; then
     while IFS= read -r f; do
-        basename=$(basename "$f")
-        is_excluded "$basename" && continue
-        fqdn="${basename%.conf}"
+        local_bname=$(basename "$f")
+        is_excluded "$local_bname" && continue
+        fqdn="${local_bname%.conf}"
         nginx_fqdns["$fqdn"]=1
     done < <(find "$CONF_D" -maxdepth 1 -name '*.conf' -type f 2>/dev/null)
 fi
@@ -116,10 +116,10 @@ fi
 # From Traefik dynamic/
 if [[ -d "$TRAEFIK_DYNAMIC_DIR" ]]; then
     while IFS= read -r f; do
-        basename=$(basename "$f")
+        local_bname=$(basename "$f")
         # Skip shared/special files (underscore prefix convention)
-        [[ "$basename" == _* ]] && continue
-        fqdn="${basename%.yml}"
+        [[ "$local_bname" == _* ]] && continue
+        fqdn="${local_bname%.yml}"
         fqdn="${fqdn%.yaml}"
         traefik_fqdns["$fqdn"]=1
     done < <(find "$TRAEFIK_DYNAMIC_DIR" -maxdepth 1 \( -name '*.yml' -o -name '*.yaml' \) -type f 2>/dev/null)

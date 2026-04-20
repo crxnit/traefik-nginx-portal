@@ -29,8 +29,8 @@ CONF_D="${NGINX_DIR}/conf.d"
 SITES_DIR="${NGINX_DIR}/sites"
 TRAEFIK_DYNAMIC_DIR="${TRAEFIK_DYNAMIC_DIR:-${SCRIPT_DIR}/traefik/dynamic}"
 NGINX_CONTAINER="${NGINX_CONTAINER:-nginx}"
-CERT_RESOLVER="letsencrypt"
-NGINX_SERVICE_NAME="nginx-backend"  # must match the shared service in _shared-services.yml
+CERT_RESOLVER="${CERT_RESOLVER:-letsencrypt}"
+NGINX_SERVICE_NAME="$PORTAL_NGINX_SERVICE_NAME"  # from _lib.sh; must match _shared-services.yml
 
 # --- Argument parsing ------------------------------------------------------
 
@@ -108,7 +108,7 @@ existing=()
 
 if [[ ${#existing[@]} -gt 0 ]]; then
     log_error "The following paths already exist:"
-    for p in "${existing[@]}"; do printf "  - %s\n" "$p" >&2; done
+    for p in "${existing[@]}"; do log_error "  - $p"; done
     die "Refusing to overwrite. Remove them first or choose a different FQDN."
 fi
 

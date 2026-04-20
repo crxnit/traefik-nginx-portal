@@ -136,6 +136,7 @@ echo "The following will be ${RED}${BOLD}removed${RESET}:"
 for p in "${to_remove[@]}"; do
     if [[ -d "$p" ]]; then
         size=$(du -sh "$p" 2>/dev/null | awk '{print $1}')
+        [[ -n "$size" ]] || size="?"
         printf "  - %s ${YELLOW}(directory, %s)${RESET}\n" "$p" "$size"
     else
         printf "  - %s\n" "$p"
