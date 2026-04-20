@@ -21,6 +21,7 @@ archive/
 
 # Runtime artifacts
 srv/portal/.portal.lock
+srv/portal/logs/
 
 # OS / editor cruft
 .DS_Store

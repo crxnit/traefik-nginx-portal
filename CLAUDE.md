@@ -66,6 +66,12 @@ Plain HTTP (:80) is configured to redirect everything to `websecure`. TLS option
 All commands assume cwd = `srv/portal/`.
 
 ```bash
+# Interactive menu covering every operator action (wraps the scripts below).
+# Requires a TTY. For non-interactive use, invoke the scripts directly.
+# Writes an audit log to srv/portal/logs/menu.log (gitignored).
+./menu.sh
+./menu.sh --cheatsheet     # non-interactive CLI reference
+
 # Bootstrap (one time, per server) — idempotent; chains the three setup steps
 # and enforces the right order (networks, acme.json preflight, default TLS).
 ./bootstrap.sh

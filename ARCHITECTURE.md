@@ -212,6 +212,22 @@ Read-only; always safe to run.
 
 **`nginx/reload-nginx.sh`** — test-and-graceful-reload the nginx container. Thin wrapper around `_lib.sh::nginx_reload`. Useful when you've hand-edited `conf.d/` files and need to apply them without going through provision.
 
+**`menu.sh`** — interactive menu that wraps every other script in the toolkit. Organizes actions into host-setup, stack-lifecycle, sites, and logs categories. Requires a TTY (reads go through `/dev/tty` so piped stdin can't bypass confirmation prompts). For non-interactive use, invoke the underlying scripts directly or run `./menu.sh --cheatsheet` to print the CLI equivalents.
+
+Every menu session writes to an audit log at `srv/portal/logs/menu.log` (gitignored, mode 600). One event per line, UTC timestamp, key=value format:
+
+```
+2026-04-20T16:20:20Z session_start user=john host=prod-1 pid=38341 tty=/dev/pts/0
+2026-04-20T16:20:25Z menu_choice user=john host=prod-1 pid=38341 choice=10 label=provision_site
+2026-04-20T16:20:25Z action_start user=john host=prod-1 pid=38341 action=provision_site
+2026-04-20T16:20:29Z action_end user=john host=prod-1 pid=38341 action=provision_site exit=0 duration=4s
+2026-04-20T16:20:35Z session_end user=john host=prod-1 pid=38341 duration=15s
+```
+
+The PID doubles as a session identifier — `grep 'pid=38341' menu.log` reconstructs an operator's entire session. If the log directory isn't writable, a one-time warning prints and the menu continues without audit logging (logging failure never blocks operator work). Menu option `L` shows the last 30 entries without leaving the tool.
+
+The audit log records **metadata only** (what was done, when, by whom, with what exit code) — not captured command output. If full transcripts are needed, use `script(1)` or `tee` externally: `./menu.sh 2>&1 | tee session-$(date +%s).log`.
+
 ---
 
 ## 7. Shared library: `_lib.sh`
