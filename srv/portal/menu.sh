@@ -126,12 +126,15 @@ prompt_yes_no() {
 
 prompt_fqdn() {
     local prompt="${1:-Enter FQDN}" fqdn
-    read -rp "$prompt: " fqdn </dev/tty
-    if ! validate_fqdn "$fqdn"; then
-        log_error "Invalid FQDN: '$fqdn'"
-        return 1
-    fi
-    printf '%s' "$fqdn"
+    while true; do
+        read -rp "$prompt (or Enter to cancel): " fqdn </dev/tty
+        [[ -z "$fqdn" ]] && return 1
+        if validate_fqdn "$fqdn"; then
+            printf '%s' "$fqdn"
+            return 0
+        fi
+        log_error "Invalid FQDN: '$fqdn' — try again."
+    done
 }
 
 # --- Status banner ---------------------------------------------------------
@@ -150,8 +153,16 @@ stack_status() {
     fi
 
     local t_color n_color
-    case "$traefik_state" in running) t_color="$GREEN" ;; absent) t_color="$DIM" ;; *) t_color="$YELLOW" ;; esac
-    case "$nginx_state"   in running) n_color="$GREEN" ;; absent) n_color="$DIM" ;; *) n_color="$YELLOW" ;; esac
+    case "$traefik_state" in
+        running) t_color="$GREEN"  ;;
+        absent)  t_color="$DIM"    ;;
+        *)       t_color="$YELLOW" ;;
+    esac
+    case "$nginx_state" in
+        running) n_color="$GREEN"  ;;
+        absent)  n_color="$DIM"    ;;
+        *)       n_color="$YELLOW" ;;
+    esac
 
     local site_count=0
     if [[ -d "${SCRIPT_DIR}/traefik/dynamic" ]]; then
@@ -191,8 +202,10 @@ action_stop_stacks() {
         log_info "Cancelled."
         return 0
     fi
-    docker compose -f "$TRAEFIK_COMPOSE" down
-    docker compose -f "$NGINX_COMPOSE" down
+    # --timeout 30 gives in-flight connections up to 30s to drain before SIGKILL.
+    # Traefik first so new requests stop arriving, then nginx.
+    docker compose -f "$TRAEFIK_COMPOSE" down --timeout 30
+    docker compose -f "$NGINX_COMPOSE"   down --timeout 30
 }
 
 action_restart_stacks() {
@@ -214,7 +227,7 @@ action_list_sites() {
 action_list_sites_probe() {
     header "All sites (with reachability probe)"
     local probe_host
-    read -rp "Probe host (Enter for 127.0.0.1, useful when running off-host): " probe_host </dev/tty
+    read -rp "Probe host [127.0.0.1]: " probe_host </dev/tty
     if [[ -n "$probe_host" ]]; then
         "${SCRIPT_DIR}/list-sites.sh" --probe --probe-host "$probe_host"
     else
@@ -281,25 +294,21 @@ action_reload_nginx() {
     "${SCRIPT_DIR}/nginx/reload-nginx.sh"
 }
 
-action_traefik_logs_tail() {
-    header "Traefik logs (last 100 lines)"
-    docker compose -f "$TRAEFIK_COMPOSE" logs --tail=100 traefik
+show_logs() {
+    local name="$1" compose="$2" service="$3" follow="$4"
+    if [[ "$follow" == "true" ]]; then
+        header "${name} logs (follow, Ctrl-C to exit)"
+        docker compose -f "$compose" logs -f --tail=50 "$service"
+    else
+        header "${name} logs (last 100 lines)"
+        docker compose -f "$compose" logs --tail=100 "$service"
+    fi
 }
 
-action_traefik_logs_follow() {
-    header "Traefik logs (follow, Ctrl-C to exit)"
-    docker compose -f "$TRAEFIK_COMPOSE" logs -f --tail=50 traefik
-}
-
-action_nginx_logs_tail() {
-    header "nginx logs (last 100 lines)"
-    docker compose -f "$NGINX_COMPOSE" logs --tail=100 nginx
-}
-
-action_nginx_logs_follow() {
-    header "nginx logs (follow, Ctrl-C to exit)"
-    docker compose -f "$NGINX_COMPOSE" logs -f --tail=50 nginx
-}
+action_traefik_logs_tail()   { show_logs Traefik "$TRAEFIK_COMPOSE" traefik false; }
+action_traefik_logs_follow() { show_logs Traefik "$TRAEFIK_COMPOSE" traefik true;  }
+action_nginx_logs_tail()     { show_logs nginx   "$NGINX_COMPOSE"   nginx   false; }
+action_nginx_logs_follow()   { show_logs nginx   "$NGINX_COMPOSE"   nginx   true;  }
 
 action_view_audit_log() {
     header "Recent audit log entries (last 30)"
@@ -400,10 +409,12 @@ main() {
     # Labels are stable identifiers for grep/analytics; action fn names may change.
     while true; do
         show_menu
-        local choice label fn
+        local choice label="" fn="" lower
         read -rp "Choice: " choice </dev/tty || { echo; exit 0; }
+        # Portable lowercase — bash 3.2 (stock macOS) does not support ${var,,}.
+        lower=$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]')
 
-        case "${choice,,}" in
+        case "$lower" in
             1)  label=bootstrap_host        ; fn=action_bootstrap ;;
             2)  label=regen_default_tls     ; fn=action_regen_default_tls ;;
             3)  label=start_stacks          ; fn=action_start_stacks ;;
