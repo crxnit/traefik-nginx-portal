@@ -1,0 +1,10 @@
+# Shared Traefik services referenced by per-site routers.
+# Underscore prefix keeps this file out of list-sites.sh FQDN discovery.
+
+http:
+  services:
+    nginx-backend:
+      loadBalancer:
+        servers:
+          - url: "http://nginx:80"
+        passHostHeader: true

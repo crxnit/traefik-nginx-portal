@@ -1,0 +1,41 @@
+services:
+  traefik:
+    image: traefik:v3.3.4
+    container_name: traefik
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic/:/etc/traefik/dynamic/:ro
+      - ./traefik/certs/:/etc/traefik/certs/:ro
+      - ./traefik/acme.json:/acme.json
+    networks:
+      - traefik
+      - edge
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 256m
+    cpus: 0.5
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping.entryPoint=ping"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+networks:
+  traefik:
+    name: traefik
+    external: true
+  edge:
+    name: edge
+    external: true
