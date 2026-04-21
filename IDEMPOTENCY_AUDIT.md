@@ -1,7 +1,7 @@
 # Idempotency Audit
 
 **Date:** 2026-04-19
-**Repository:** `/Users/john/newscratch/traefik-nginx-provisioning-scripts`
+**Repository:** `traefik-nginx-provisioning-scripts`
 **Files reviewed:** 16 (7 shell, 2 compose, 4 Traefik, 3 nginx)
 
 ## 1. Executive Summary

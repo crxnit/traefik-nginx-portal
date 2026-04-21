@@ -1,4 +1,4 @@
-# Building an App for the JJOC Portal Infrastructure
+# Building an App for the Portal Infrastructure
 
 > **How to use this document:** Paste the contents into the top of a new LLM session, share with a developer starting a new app, or keep in the repo as a reference. It tells you *exactly* what constraints to design around so the app slots into the existing deployment without rework.
 >
@@ -238,7 +238,7 @@ Copy this into your new project's README or ticket. Tick each item before the fi
 
 When your app is ready, hand the operator:
 
-1. **The FQDN** you want (e.g., `myapp.jjocllc.com`).
+1. **The FQDN** you want (e.g., `myapp.example.com`).
 2. **DNS confirmation** — the A/AAAA record points at the portal host's public IP. Traefik's Let's Encrypt HTTP-01 challenge requires this *before* the first deploy.
 3. **For Pattern A (static):** a tarball or git repo URL of the build output.
 4. **For Pattern B (dynamic):**

@@ -13,7 +13,7 @@
 #   ./deprovision-site.sh <fqdn> [--dry-run] [--yes] [--no-reload] [--keep-content] [--traefik-dir <path>]
 #
 # Examples:
-#   ./deprovision-site.sh webproxy.ai.jjocllc.com --dry-run
+#   ./deprovision-site.sh myapp.example.com --dry-run
 #   ./deprovision-site.sh old-client.example.com
 #   ./deprovision-site.sh old-client.example.com --yes  # skip confirmation
 

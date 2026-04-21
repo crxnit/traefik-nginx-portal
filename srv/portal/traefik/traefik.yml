@@ -46,7 +46,10 @@ providers:
 certificatesResolvers:
   letsencrypt:
     acme:
-      email: letsencrypt@jjocllc.com
+      # REQUIRED: replace with a real contact email. Let's Encrypt sends
+      # expiration warnings and occasional policy notices here — must be
+      # monitored. Do NOT ship the placeholder into production.
+      email: letsencrypt@example.com
       storage: /acme.json
       httpChallenge:
         entryPoint: web

@@ -1,6 +1,6 @@
-# Migrating an Existing App to the JJOC Portal Infrastructure
+# Migrating an Existing App to the Portal Infrastructure
 
-> **How to use this document:** Paste into an LLM session when working on an *existing* codebase (not a greenfield build) that needs to run behind the JJOC portal. Pair with `APP_DEVELOPMENT_PROMPT.md` (new-app version) — this doc focuses on auditing and adapting what's already there.
+> **How to use this document:** Paste into an LLM session when working on an *existing* codebase (not a greenfield build) that needs to run behind the portal. Pair with `APP_DEVELOPMENT_PROMPT.md` (new-app version) — this doc focuses on auditing and adapting what's already there.
 >
 > **Path convention.** Where this doc mentions `/srv/portal/`, treat it as a conventional example — the portal's scripts resolve their own directory at runtime and work at any checkout path (`/srv/ai/portal/`, `/opt/portal/`, etc.). The operator substitutes the real path when running commands.
 

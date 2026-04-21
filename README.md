@@ -1,0 +1,71 @@
+# Traefik + nginx Multi-Site Provisioning Toolkit
+
+A single-host, multi-tenant web hosting stack built on **Traefik** (TLS termination + routing) in front of **nginx** (static content). Provisioning, drift detection, auditing, and operational tooling come as shell scripts that follow a strict three-artifact-per-site invariant and leave the system in a consistent state on any failure.
+
+## What you get
+
+- **One Traefik instance** handling TLS for many FQDNs, with Let's Encrypt certificates obtained automatically via HTTP-01.
+- **One nginx instance** serving static content (built SPA output, HTML, assets) per FQDN.
+- **Ten shell scripts** that manage the full site lifecycle: bootstrap a host, provision/deprovision sites atomically, detect drift, verify container wiring, regenerate the default TLS cert, tail logs, and route everything through an interactive menu with an audit log.
+- **Hardened containers**: read-only root filesystems, dropped capabilities, `no-new-privileges`, healthchecks, resource limits, image pinning.
+- **Complete documentation** spanning architecture, operator procedures, AI context, app-development briefings, and a full idempotency audit.
+
+## Quickstart
+
+```bash
+git clone <this-repo> /srv/portal-src
+cd /srv/portal-src/srv/portal
+
+# One-shot host setup (idempotent — safe to re-run)
+./bin/bootstrap.sh
+
+# Start the stacks (nginx first so Traefik finds a ready backend)
+docker compose -f nginx/docker-compose.yml up -d
+docker compose up -d
+
+# Interactive menu (recommended operator entry point; writes audit log)
+./bin/menu.sh
+
+# Or invoke scripts directly:
+./bin/provision-site.sh myapp.example.com
+./bin/list-sites.sh
+./bin/verify-networks.sh
+```
+
+> **Before first deploy:** set a real contact email in `srv/portal/traefik/traefik.yml` (the `letsencrypt@example.com` placeholder must be replaced — Let's Encrypt sends expiration warnings there). And ensure DNS for your FQDNs points at the host *before* provisioning, since ACME HTTP-01 validation needs the hostname to resolve.
+
+## Documentation map
+
+| Document | Audience | Purpose |
+|---|---|---|
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Human operators, new engineers | System topology, request flow, file layout, the three-artifact invariant, idempotency model, security hardening |
+| [SCRIPTS_GUIDE.md](SCRIPTS_GUIDE.md) | Infrastructure engineers | Per-script reference, operator workflows, troubleshooting, extending the toolkit |
+| [APP_DEVELOPMENT_PROMPT.md](APP_DEVELOPMENT_PROMPT.md) | App developers (greenfield) | Hard constraints for new apps deploying here; paste into an LLM to anchor design |
+| [APP_MIGRATION_PROMPT.md](APP_MIGRATION_PROMPT.md) | App developers (existing apps) | Audit-then-migrate checklist for adapting existing apps to this infra |
+| [IDEMPOTENCY_AUDIT.md](IDEMPOTENCY_AUDIT.md) | Anyone curious about rationale | Full audit trail — 16 findings, 15 resolved, 1 deferred-by-design with reasoning |
+| [CLAUDE.md](CLAUDE.md) | AI assistants | Terse, opinionated context for AI pair-programming sessions |
+| [SECURITY.md](SECURITY.md) | Security researchers | Disclosure policy, supported versions |
+
+## Design principles
+
+- **Three-artifact invariant per site.** A site is exactly `nginx/conf.d/<fqdn>.conf` + `nginx/sites/<fqdn>/` + `traefik/dynamic/<fqdn>.yml`. Provisioning is atomic across all three; missing any one is "drift" and caught by `list-sites.sh`.
+- **Path-agnostic scripts.** Every script self-locates via `$BASH_SOURCE`. Works at `/srv/portal/`, `/opt/portal/`, `~/work/portal/` — any clone location.
+- **Atomic file writes.** Generated configs go through `write_atomic` (mktemp → rename) so SIGKILL or power loss can never leave a half-written conf that crashes nginx.
+- **Rollback on partial failure.** `provision-site.sh` installs an EXIT trap that removes any artifacts it created if `nginx -t` fails. Next run finds a clean slate.
+- **Flock-based mutex.** Concurrent provision/deprovision invocations serialize safely; never race on the same FQDN.
+- **Bash 3.2 compatible.** Every script parses and runs on stock macOS bash 3.2 (dev) and modern bash 4+ (prod).
+- **Full audit trail.** `menu.sh` writes every session and every action to `logs/menu.log` — metadata format, greppable, pid-grouped for session reconstruction.
+
+## Status
+
+Single-host, single-operator design. Production-hardened for a small portfolio of static sites and (with operator-provided compose + Traefik dynamic yaml) dynamic containerized apps.
+
+Not included: multi-host orchestration, wildcard certs (HTTP-01 only), centralized log aggregation, built-in monitoring beyond Docker healthchecks. See `ARCHITECTURE.md §13` for the full list of deliberate tradeoffs.
+
+## Contributing
+
+See `SECURITY.md` for vulnerability reports. For functional bugs, open an issue; for changes, open a PR against `main`. All scripts should parse in both bash 3.2 and bash 4+ and pass `shellcheck` where applicable.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

@@ -13,9 +13,9 @@
 #   ./provision-site.sh <fqdn> [--spa] [--no-reload] [--traefik-dir <path>]
 #
 # Examples:
-#   ./provision-site.sh webproxy.ai.jjocllc.com
-#   ./provision-site.sh app.client-a.com --spa
-#   ./provision-site.sh landing.jjocllc.com --traefik-dir /opt/traefik/dynamic
+#   ./provision-site.sh myapp.example.com
+#   ./provision-site.sh app.example.com --spa
+#   ./provision-site.sh landing.example.com --traefik-dir /opt/traefik/dynamic
 
 set -euo pipefail
 
