@@ -23,6 +23,7 @@ PORTAL_DIR="$(cd "${_LIB_DIR}/.." && pwd)"
 export PORTAL_DIR
 
 # --- Colors ----------------------------------------------------------------
+# shellcheck disable=SC2034  # BOLD/DIM are used by callers after sourcing.
 
 if [[ -t 1 ]]; then
     GREEN='\033[0;32m'
@@ -65,6 +66,7 @@ validate_fqdn() {
 # Traefik service name that every generated per-site router references.
 # Must match the `services:` key in traefik/dynamic/_shared-services.yml.
 # If you rename the service, update both this constant AND the yaml.
+# shellcheck disable=SC2034  # Consumed by provision-site.sh after sourcing.
 PORTAL_NGINX_SERVICE_NAME="nginx-backend"
 
 # --- Atomic file writes ----------------------------------------------------

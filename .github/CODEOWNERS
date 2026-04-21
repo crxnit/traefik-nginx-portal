@@ -1,0 +1,29 @@
+# CODEOWNERS — pins PR review requirements on security-sensitive paths.
+#
+# Format: <path pattern>    <@user-or-team>[ ...]
+# The last matching line wins (patterns are not additive).
+#
+# REQUIRED before making this repo public: replace @OWNER with your
+# real GitHub username or team handle (e.g. @johnoconnor or @org/ops).
+# Without a valid handle here, CODEOWNERS silently fails to enforce
+# review — GitHub won't error, it just won't assign reviewers.
+
+# Default owner for everything not listed below
+*                                   @OWNER
+
+# Shell scripts — supply-chain sensitive; subtle changes to the FQDN
+# regex or the rm -rf paths could introduce command injection or
+# unsafe deletes. Require maintainer review on every change.
+/srv/portal/bin/*.sh                @OWNER
+
+# Traefik + nginx config templates. Changes here alter the shipped
+# security posture for every downstream deployment.
+/srv/portal/traefik/                @OWNER
+/srv/portal/nginx/                  @OWNER
+/srv/portal/docker-compose.yml      @OWNER
+
+# Security-policy docs and CI configuration
+SECURITY.md                         @OWNER
+/.github/                           @OWNER
+/.pre-commit-config.yaml            @OWNER
+/.gitignore                         @OWNER

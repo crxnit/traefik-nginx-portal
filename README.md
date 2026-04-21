@@ -64,7 +64,7 @@ Not included: multi-host orchestration, wildcard certs (HTTP-01 only), centraliz
 
 ## Contributing
 
-See `SECURITY.md` for vulnerability reports. For functional bugs, open an issue; for changes, open a PR against `main`. All scripts should parse in both bash 3.2 and bash 4+ and pass `shellcheck` where applicable.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full contributor guide — local setup with `pre-commit`, bash 3.2 portability expectations, commit conventions, and what gets merged. Security vulnerabilities: [SECURITY.md](SECURITY.md) (private disclosure, not a public issue).
 
 ## License
 

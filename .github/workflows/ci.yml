@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Parse every script on both bash 5 (ubuntu-latest) and bash 3.2
+  # (macos-latest — Apple still ships the GPLv2 era of bash). This
+  # catches the `${var,,}` class of regressions that only surface at
+  # runtime under 3.2.
+  bash-syntax:
+    name: bash -n (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show bash version
+        run: bash --version | head -1
+      - name: Syntax-check every shell script
+        run: |
+          fail=0
+          for f in srv/portal/bin/*.sh; do
+            echo "→ $f"
+            bash -n "$f" || fail=1
+          done
+          exit $fail
+
+  # Lint every script. Severity set to `warning` so real bugs block
+  # merges but style-level noise stays silent. Bump to `info` for a
+  # strict pass (will require some inline `# shellcheck disable=`
+  # directives).
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ludeeus/action-shellcheck@master
+        with:
+          severity: warning
+          scandir: ./srv/portal/bin
+
+  # Secrets scan — catches private keys, API tokens, AWS credentials,
+  # etc. that sneak in through a rushed commit. Runs on the full git
+  # history, so fetch-depth: 0 is mandatory.
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

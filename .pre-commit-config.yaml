@@ -1,0 +1,39 @@
+# Pre-commit hooks for local development.
+#
+# Install once: `pip install pre-commit && pre-commit install`
+# Run on demand: `pre-commit run --all-files`
+#
+# CI re-runs these checks regardless; local hooks just catch issues
+# earlier so you don't round-trip through the CI queue for trivial fixes.
+
+repos:
+  # Secrets scanning — blocks commits that contain private keys, API
+  # tokens, AWS credentials, etc. Configured via the gitleaks defaults;
+  # add a .gitleaks.toml in the repo root to allowlist false positives.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+
+  # Bash syntax + lint. shellcheck catches real bugs (SC2086 unquoted
+  # expansions, SC2162 read without -r, etc.) and stylistic issues.
+  # Severity set to `warning` to match the CI workflow.
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck
+        args: ["--severity=warning"]
+
+  # Trailing whitespace, EOF newlines, large-file blocks, merge-conflict
+  # artifacts, and broken symlinks — standard hygiene.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=500"]
+      - id: check-yaml
+      - id: check-executables-have-shebangs
+      - id: check-shebang-scripts-are-executable
