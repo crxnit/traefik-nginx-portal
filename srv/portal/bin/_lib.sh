@@ -1,5 +1,7 @@
-#!/usr/bin/env bash
+# shellcheck shell=bash
 # Shared helpers for the portal scripts. Source this file — do NOT invoke it.
+# (No shebang: this file is intended for `source`, not direct execution.
+# The shellcheck directive above tells the linter which shell to assume.)
 #
 # Provides:
 #   - $PORTAL_DIR global: absolute path to the portal root (parent of bin/)
