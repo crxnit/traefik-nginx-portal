@@ -233,7 +233,7 @@ Linear steps. Skip Pattern-B-only steps if you're on Pattern A.
 8. **Local reverse-proxy test** (§ 6). Do not skip.
 9. **Pick a test FQDN** — not the real one. Something like `staging-<app>.<domain>`.
 10. **Point DNS** for the test FQDN at the portal host. Wait for propagation.
-11. **Deploy to the test FQDN.** Operator runs `./provision-site.sh` (Pattern A) or drops the compose + dynamic yaml (Pattern B) + `docker compose up -d`.
+11. **Deploy to the test FQDN.** Operator runs `./bin/provision-site.sh` (Pattern A) or drops the compose + dynamic yaml (Pattern B) + `docker compose up -d`.
 12. **Validate** (§ 7).
 13. **Cut real DNS** to the portal once the test FQDN passes all checks. First HTTPS request triggers ACME — allow 30 seconds.
 14. **Monitor logs for 24–48 hours.** Watch for proxy-header mistakes, cookie issues, URL-generation bugs that only surface under real traffic.
@@ -309,7 +309,7 @@ If something breaks after real DNS cutover:
 
 ### Pattern A
 ```bash
-./deprovision-site.sh <fqdn> --keep-content   # removes configs, preserves content
+./bin/deprovision-site.sh <fqdn> --keep-content   # removes configs, preserves content
 # Route DNS back to the previous host (if TTL permits)
 # OR serve a maintenance page: restore a simple index.html to sites/<fqdn>/
 ```

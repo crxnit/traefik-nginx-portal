@@ -45,7 +45,7 @@ Your app will run on a single Docker host behind a shared **Traefik + nginx** fr
 **What you ship:** a directory of files. That's it.
 
 **How it deploys:**
-1. Operator runs `./provision-site.sh myapp.example.com` on the host.
+1. Operator runs `./bin/provision-site.sh myapp.example.com` on the host.
 2. Your build output gets `rsync`'d into `$PORTAL_DIR/nginx/sites/myapp.example.com/`.
 3. The shared nginx serves it. No container, no process management.
 
@@ -250,8 +250,8 @@ When your app is ready, hand the operator:
 
 The operator will:
 
-- **Pattern A:** run `./provision-site.sh <fqdn>` and rsync your build in.
-- **Pattern B:** drop your compose in, add the dynamic yaml, `docker compose up -d`, verify with `./list-sites.sh --probe`.
+- **Pattern A:** run `./bin/provision-site.sh <fqdn>` and rsync your build in.
+- **Pattern B:** drop your compose in, add the dynamic yaml, `docker compose up -d`, verify with `./bin/list-sites.sh --probe`.
 
 Both patterns get Let's Encrypt certs automatically on first HTTPS request. That may take 10–30 seconds the first time as Traefik completes the ACME dance.
 
@@ -274,9 +274,9 @@ Both patterns get Let's Encrypt certs automatically on first HTTPS request. That
 When the operator asks "how do I add your app?", the answer should be one of these two templates:
 
 **Pattern A:**
-> "It's static. Run `./provision-site.sh myapp.example.com` (or add `--spa` if it's an SPA), then rsync the contents of my `dist/` directory into `srv/portal/nginx/sites/myapp.example.com/`. DNS is already pointed."
+> "It's static. Run `./bin/provision-site.sh myapp.example.com` (or add `--spa` if it's an SPA), then rsync the contents of my `dist/` directory into `srv/portal/nginx/sites/myapp.example.com/`. DNS is already pointed."
 
 **Pattern B:**
-> "It's a container. Here's the image reference and two yaml files — the `docker-compose.yml` for the app and the `traefik/dynamic/myapp.example.com.yml` for the router. Drop them both into place, `docker compose -f myapp/docker-compose.yml up -d`, and verify with `./list-sites.sh --probe`. DNS is already pointed."
+> "It's a container. Here's the image reference and two yaml files — the `docker-compose.yml` for the app and the `traefik/dynamic/myapp.example.com.yml` for the router. Drop them both into place, `docker compose -f myapp/docker-compose.yml up -d`, and verify with `./bin/list-sites.sh --probe`. DNS is already pointed."
 
 If either answer feels wrong, the app is probably not structured for this deployment — re-check sections 2–3.

@@ -128,15 +128,18 @@ A site called `example.com` is represented by **exactly three files/directories*
 ├── IDEMPOTENCY_AUDIT.md                # Audit history + rationale for design decisions
 └── srv/
     └── portal/                         # Conventionally `$PORTAL_DIR` on the host (e.g., /srv/portal/)
-        ├── bootstrap.sh                # One-shot host setup (networks, acme.json, default TLS)
-        ├── create-docker-networks.sh   # Network bootstrap (delegated from bootstrap.sh)
-        ├── ensure-default-tls.sh       # Self-signed default cert for unknown-SNI requests
-        ├── verify-networks.sh          # Post-deploy container/network wiring check
-        ├── provision-site.sh           # Add a site (three-artifact write + reload)
-        ├── deprovision-site.sh         # Remove a site (three-artifact delete + reload)
-        ├── list-sites.sh               # Drift detector + optional reachability probe
-        ├── _lib.sh                     # Shared helpers sourced by every other script
         ├── docker-compose.yml          # Traefik stack
+        ├── bin/                        # All operator-facing scripts + shared library
+        │   ├── _lib.sh                 # Shared helpers sourced by every other script
+        │   ├── bootstrap.sh            # One-shot host setup (networks, acme.json, default TLS)
+        │   ├── create-docker-networks.sh # Network bootstrap (delegated from bootstrap.sh)
+        │   ├── ensure-default-tls.sh   # Self-signed default cert for unknown-SNI requests
+        │   ├── verify-networks.sh      # Post-deploy container/network wiring check
+        │   ├── provision-site.sh       # Add a site (three-artifact write + reload)
+        │   ├── deprovision-site.sh     # Remove a site (three-artifact delete + reload)
+        │   ├── list-sites.sh           # Drift detector + optional reachability probe
+        │   ├── menu.sh                 # Interactive menu entry point + audit log
+        │   └── reload-nginx.sh         # Test + graceful reload (wrapper around _lib.sh)
         ├── traefik/
         │   ├── traefik.yml             # Static Traefik config (TLS options, entrypoints, ACME)
         │   ├── acme.json               # ACME state — NOT committed; created by bootstrap.sh
@@ -151,7 +154,6 @@ A site called `example.com` is represented by **exactly three files/directories*
         └── nginx/
             ├── docker-compose.yml      # nginx stack
             ├── nginx.conf              # Global nginx config
-            ├── reload-nginx.sh         # Test + graceful reload (wrapper around _lib.sh)
             ├── conf.d/
             │   ├── 00-default.conf     # Catchall server_name _ (default_server)
             │   └── <fqdn>.conf         # Per-site server block — NOT committed
@@ -168,7 +170,7 @@ The underscore-prefix convention on Traefik shared files (`_*.yml`) is what `lis
 
 ## 6. Scripts
 
-All scripts use `set -euo pipefail` and source `srv/portal/_lib.sh`. They're organized into three groups by purpose:
+All scripts use `set -euo pipefail` and source `srv/portal/bin/_lib.sh`. They're organized into three groups by purpose:
 
 ### 6.1. Host bootstrap (run once per server)
 
@@ -212,9 +214,9 @@ Read-only; always safe to run.
 
 ### 6.3. Operational utility
 
-**`nginx/reload-nginx.sh`** — test-and-graceful-reload the nginx container. Thin wrapper around `_lib.sh::nginx_reload`. Useful when you've hand-edited `conf.d/` files and need to apply them without going through provision.
+**`bin/reload-nginx.sh`** — test-and-graceful-reload the nginx container. Thin wrapper around `_lib.sh::nginx_reload`. Useful when you've hand-edited `conf.d/` files and need to apply them without going through provision.
 
-**`menu.sh`** — interactive menu that wraps every other script in the toolkit. Organizes actions into host-setup, stack-lifecycle, sites, and logs categories. Requires a TTY (reads go through `/dev/tty` so piped stdin can't bypass confirmation prompts). For non-interactive use, invoke the underlying scripts directly or run `./menu.sh --cheatsheet` to print the CLI equivalents.
+**`menu.sh`** — interactive menu that wraps every other script in the toolkit. Organizes actions into host-setup, stack-lifecycle, sites, and logs categories. Requires a TTY (reads go through `/dev/tty` so piped stdin can't bypass confirmation prompts). For non-interactive use, invoke the underlying scripts directly or run `./bin/menu.sh --cheatsheet` to print the CLI equivalents.
 
 Every menu session writes to an audit log at `srv/portal/logs/menu.log` (gitignored, mode 600). One event per line, UTC timestamp, key=value format:
 
@@ -228,7 +230,7 @@ Every menu session writes to an audit log at `srv/portal/logs/menu.log` (gitigno
 
 The PID doubles as a session identifier — `grep 'pid=38341' menu.log` reconstructs an operator's entire session. If the log directory isn't writable, a one-time warning prints and the menu continues without audit logging (logging failure never blocks operator work). Menu option `L` shows the last 30 entries without leaving the tool.
 
-The audit log records **metadata only** (what was done, when, by whom, with what exit code) — not captured command output. If full transcripts are needed, use `script(1)` or `tee` externally: `./menu.sh 2>&1 | tee session-$(date +%s).log`.
+The audit log records **metadata only** (what was done, when, by whom, with what exit code) — not captured command output. If full transcripts are needed, use `script(1)` or `tee` externally: `./bin/menu.sh 2>&1 | tee session-$(date +%s).log`.
 
 ---
 
@@ -238,7 +240,7 @@ The audit log records **metadata only** (what was done, when, by whom, with what
 
 ### 7.1. Colors
 
-TTY-aware variables: `GREEN`, `YELLOW`, `RED`, `BLUE`, `BOLD`, `DIM`, `RESET`. Empty strings when output is piped (so `./provision-site.sh foo | tee log` produces clean log files, no escape codes).
+TTY-aware variables: `GREEN`, `YELLOW`, `RED`, `BLUE`, `BOLD`, `DIM`, `RESET`. Empty strings when output is piped (so `./bin/provision-site.sh foo | tee log` produces clean log files, no escape codes).
 
 ### 7.2. Log helpers
 
@@ -304,7 +306,7 @@ The scripts take different stances on re-runnability, matching the shape of what
 | `list-sites.sh` | **Read-only** | No state change |
 | `provision-site.sh` | **One-shot** (refuses re-run on existing site) | Prevents accidental overwrite of hand-edited configs or deployed content; if you truly want to re-provision, deprovision first |
 | `deprovision-site.sh` | **Idempotent** | "Nothing to remove" is treated as success; the "desired state" is absence |
-| `nginx/reload-nginx.sh` | **Idempotent** | Graceful reload is inherently re-runnable |
+| `bin/reload-nginx.sh` | **Idempotent** | Graceful reload is inherently re-runnable |
 
 **Why is `provision-site.sh` one-shot rather than convergent?** The provision script writes three artifacts, two of which are content directories that the operator may later populate with real data (HTML, assets, etc.). A convergent provision ("re-run until state matches desired") could wipe deployed content. The one-shot refuse-to-overwrite is the safety rail.
 
@@ -360,22 +362,22 @@ git clone <this-repo> /srv/portal-src
 cd /srv/portal-src
 
 # Bootstrap host state (idempotent, safe to re-run)
-./srv/portal/bootstrap.sh
+./srv/portal/bin/bootstrap.sh
 
 # Start the stacks (nginx first so Traefik finds a ready backend)
 docker compose -f srv/portal/nginx/docker-compose.yml up -d
 docker compose -f srv/portal/docker-compose.yml up -d
 
 # Sanity check
-./srv/portal/verify-networks.sh
-./srv/portal/list-sites.sh
+./srv/portal/bin/verify-networks.sh
+./srv/portal/bin/list-sites.sh
 ```
 
 ### Add a site
 
 ```bash
 # Provision (creates 3 artifacts, tests config, reloads nginx)
-./srv/portal/provision-site.sh example.com
+./srv/portal/bin/provision-site.sh example.com
 
 # Deploy real content into $PORTAL_DIR/nginx/sites/<fqdn>/
 rsync -av build/ ./srv/portal/nginx/sites/example.com/
@@ -387,16 +389,16 @@ curl -I https://example.com/
 ### Remove a site
 
 ```bash
-./srv/portal/deprovision-site.sh example.com --dry-run   # preview
-./srv/portal/deprovision-site.sh example.com             # type FQDN to confirm
+./srv/portal/bin/deprovision-site.sh example.com --dry-run   # preview
+./srv/portal/bin/deprovision-site.sh example.com             # type FQDN to confirm
 ```
 
 ### Audit
 
 ```bash
-./srv/portal/list-sites.sh               # table view
-./srv/portal/list-sites.sh --probe       # + reachability checks
-./srv/portal/list-sites.sh --drift-only  # only show misconfigured sites
+./srv/portal/bin/list-sites.sh               # table view
+./srv/portal/bin/list-sites.sh --probe       # + reachability checks
+./srv/portal/bin/list-sites.sh --drift-only  # only show misconfigured sites
 ```
 
 ---
@@ -410,8 +412,8 @@ The scripts honor `NGINX_CONTAINER` / `TRAEFIK_CONTAINER` environment variables 
 export NGINX_CONTAINER=staging-nginx
 export TRAEFIK_CONTAINER=staging-traefik
 
-./srv/portal/verify-networks.sh
-./srv/portal/provision-site.sh staging.example.com
+./srv/portal/bin/verify-networks.sh
+./srv/portal/bin/provision-site.sh staging.example.com
 ```
 
 The compose files still pin `container_name: nginx` / `container_name: traefik` by default, so you'll need to override those via a compose override file or edit the compose files to match your container names. The env-var plumbing is there so the scripts don't need to be forked.

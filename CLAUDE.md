@@ -17,7 +17,7 @@ Two independent compose stacks that meet on shared Docker networks:
 
 **nginx logging under `read_only`:** there is no writable path for `/var/log/nginx/` inside the container. `nginx.conf` writes `access_log /var/log/nginx/access.log` / `error_log /var/log/nginx/error.log`, which works because the `nginx:alpine` image ships those paths as symlinks to `/dev/stdout` / `/dev/stderr`. Do NOT introduce any other `access_log`/`error_log` paths in `conf.d/*.conf` — new filenames have no symlink, and nginx will fail to start trying to create them in a read-only dir. If per-site on-disk logs are ever wanted, add `./logs:/var/log/nginx` as a bind mount *and* drop `read_only: true`.
 
-Both networks (`traefik`, `edge`) are declared `external: true` and must exist before either stack starts. Run `srv/portal/bootstrap.sh` once per host — it chains `create-docker-networks.sh`, the `acme.json` preflight (touch + chmod 600), and `ensure-default-tls.sh` in the correct order, and is safe to re-run. Verify wiring with `srv/portal/verify-networks.sh` (expects `traefik → edge,traefik` and `nginx → edge`).
+Both networks (`traefik`, `edge`) are declared `external: true` and must exist before either stack starts. Run `srv/portal/bin/bootstrap.sh` once per host — it chains `create-docker-networks.sh`, the `acme.json` preflight (touch + chmod 600), and `ensure-default-tls.sh` in the correct order, and is safe to re-run. Verify wiring with `srv/portal/bin/verify-networks.sh` (expects `traefik → edge,traefik` and `nginx → edge`).
 
 `acme.json` is not committed — `bootstrap.sh` creates it with mode 600 on demand. Without the preflight, `docker compose up` silently auto-creates the bind-mount path as a root-owned directory, which breaks Traefik permanently; `bootstrap.sh` is how you avoid that class of failure.
 
@@ -33,7 +33,7 @@ If any one of these is missing, `list-sites.sh` reports **drift**. The provision
 
 ### Shared script helpers
 
-`srv/portal/_lib.sh` is sourced by every script in the portal (all 8 of them). It provides the shared vocabulary so scripts stay terse and consistent:
+`srv/portal/bin/_lib.sh` is sourced by every script in the portal (all 8 of them). It provides the shared vocabulary so scripts stay terse and consistent:
 
 **Colors (TTY-aware; empty strings when output is piped):** `GREEN`, `YELLOW`, `RED`, `BLUE`, `BOLD`, `DIM`, `RESET`.
 
@@ -45,7 +45,7 @@ If any one of these is missing, `list-sites.sh` reports **drift**. The provision
 - `validate_fqdn <fqdn>` — single source of truth for the FQDN regex. Also rejects `..` and `/` even though the regex already excludes them (defense-in-depth since the FQDN is later used in `rm -rf` paths). Edit here, not in callers.
 - `acquire_portal_lock <dir>` — `flock`-based mutex so two concurrent provision/deprovision invocations don't race. Silent no-op if `flock` isn't installed (macOS dev hosts).
 - `write_atomic <target>` — reads stdin, writes to a temp file on the same filesystem, renames atomically. Prevents half-written files if the process is SIGKILL'd or the host loses power. Respects umask. Use for any generated config/content file; for mode-sensitive outputs (keys, etc.) follow the explicit mktemp-chmod-mv pattern like `ensure-default-tls.sh` does for the openssl key/cert pair.
-- `nginx_reload [container]` — test-and-graceful-reload the running nginx. Skips with a warning if the container isn't running. Returns non-zero only on config-test or reload failure. Used by `provision-site.sh`, `deprovision-site.sh`, and `nginx/reload-nginx.sh` — three callers, one implementation. Callers supply their own contextual error messages after a non-zero return.
+- `nginx_reload [container]` — test-and-graceful-reload the running nginx. Skips with a warning if the container isn't running. Returns non-zero only on config-test or reload failure. Used by `provision-site.sh`, `deprovision-site.sh`, and `bin/reload-nginx.sh` — three callers, one implementation. Callers supply their own contextual error messages after a non-zero return.
 
 ### Shared Traefik dynamic files
 
@@ -69,42 +69,42 @@ All commands assume cwd = `srv/portal/`.
 # Interactive menu covering every operator action (wraps the scripts below).
 # Requires a TTY. For non-interactive use, invoke the scripts directly.
 # Writes an audit log to srv/portal/logs/menu.log (gitignored).
-./menu.sh
-./menu.sh --cheatsheet     # non-interactive CLI reference
+./bin/menu.sh
+./bin/menu.sh --cheatsheet     # non-interactive CLI reference
 
 # Bootstrap (one time, per server) — idempotent; chains the three setup steps
 # and enforces the right order (networks, acme.json preflight, default TLS).
-./bootstrap.sh
+./bin/bootstrap.sh
 
 # Start stacks (nginx first so Traefik finds a ready backend on first request)
 docker compose -f nginx/docker-compose.yml up -d   # nginx
 docker compose up -d                     # Traefik
 
 # Verify health
-./verify-networks.sh                     # confirms both containers on correct networks
-./list-sites.sh                          # table: nginx/content/traefik presence per site
-./list-sites.sh --probe                  # adds `nginx -T` check + HTTPS reachability
-./list-sites.sh --probe --probe-host X   # probe from off-host, resolving to Traefik IP X
-./list-sites.sh --drift-only             # show only inconsistent sites
-./list-sites.sh --format json            # machine-readable
+./bin/verify-networks.sh                     # confirms both containers on correct networks
+./bin/list-sites.sh                          # table: nginx/content/traefik presence per site
+./bin/list-sites.sh --probe                  # adds `nginx -T` check + HTTPS reachability
+./bin/list-sites.sh --probe --probe-host X   # probe from off-host, resolving to Traefik IP X
+./bin/list-sites.sh --drift-only             # show only inconsistent sites
+./bin/list-sites.sh --format json            # machine-readable
 
 # Site lifecycle
-./provision-site.sh <fqdn>               # static site
-./provision-site.sh <fqdn> --spa         # SPA fallback (try_files ... /index.html)
-./provision-site.sh <fqdn> --no-reload   # skip `nginx -t` + reload
-./deprovision-site.sh <fqdn> --dry-run   # preview
-./deprovision-site.sh <fqdn>             # prompts: type the FQDN to confirm
-./deprovision-site.sh <fqdn> --yes --keep-content   # remove configs, keep sites/<fqdn>/
+./bin/provision-site.sh <fqdn>               # static site
+./bin/provision-site.sh <fqdn> --spa         # SPA fallback (try_files ... /index.html)
+./bin/provision-site.sh <fqdn> --no-reload   # skip `nginx -t` + reload
+./bin/deprovision-site.sh <fqdn> --dry-run   # preview
+./bin/deprovision-site.sh <fqdn>             # prompts: type the FQDN to confirm
+./bin/deprovision-site.sh <fqdn> --yes --keep-content   # remove configs, keep sites/<fqdn>/
 
 # Manual nginx reload (used by provisioning scripts internally)
-./nginx/reload-nginx.sh
+./bin/reload-nginx.sh
 
 # Override Traefik dynamic dir (env var or flag)
-TRAEFIK_DYNAMIC_DIR=/opt/traefik/dynamic ./provision-site.sh ...
-./provision-site.sh <fqdn> --traefik-dir /opt/traefik/dynamic
+TRAEFIK_DYNAMIC_DIR=/opt/traefik/dynamic ./bin/provision-site.sh ...
+./bin/provision-site.sh <fqdn> --traefik-dir /opt/traefik/dynamic
 
 # Override container names (e.g., running a second portal alongside this one)
-NGINX_CONTAINER=staging-nginx TRAEFIK_CONTAINER=staging-traefik ./verify-networks.sh
+NGINX_CONTAINER=staging-nginx TRAEFIK_CONTAINER=staging-traefik ./bin/verify-networks.sh
 ```
 
 No build, no tests, no linter — this is purely shell + config.

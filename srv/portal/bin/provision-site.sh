@@ -24,10 +24,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=_lib.sh
 source "${SCRIPT_DIR}/_lib.sh"
-NGINX_DIR="${SCRIPT_DIR}/nginx"
+# Non-script paths are resolved against $PORTAL_DIR (set by _lib.sh).
+NGINX_DIR="${PORTAL_DIR}/nginx"
 CONF_D="${NGINX_DIR}/conf.d"
 SITES_DIR="${NGINX_DIR}/sites"
-TRAEFIK_DYNAMIC_DIR="${TRAEFIK_DYNAMIC_DIR:-${SCRIPT_DIR}/traefik/dynamic}"
+TRAEFIK_DYNAMIC_DIR="${TRAEFIK_DYNAMIC_DIR:-${PORTAL_DIR}/traefik/dynamic}"
 NGINX_CONTAINER="${NGINX_CONTAINER:-nginx}"
 CERT_RESOLVER="${CERT_RESOLVER:-letsencrypt}"
 NGINX_SERVICE_NAME="$PORTAL_NGINX_SERVICE_NAME"  # from _lib.sh; must match _shared-services.yml
@@ -83,7 +84,7 @@ done
 
 validate_fqdn "$FQDN" || die "Invalid FQDN: '$FQDN'. Must be lowercase, contain at least one dot, and follow DNS naming rules."
 
-acquire_portal_lock "$SCRIPT_DIR"
+acquire_portal_lock "$PORTAL_DIR"
 
 # Check required directories exist
 [[ -d "$CONF_D" ]]   || die "nginx conf.d directory not found: $CONF_D"

@@ -14,15 +14,15 @@ Reference for infrastructure engineers operating or extending the portal's shell
 
 | I want to... | Command |
 |---|---|
-| Do anything interactively | `./menu.sh` |
-| First-time host setup | `./bootstrap.sh` |
-| Add a new site | `./provision-site.sh <fqdn>` |
-| Remove a site | `./deprovision-site.sh <fqdn>` |
-| See every provisioned site + drift | `./list-sites.sh` |
-| Confirm containers are wired correctly | `./verify-networks.sh` |
-| Reload nginx config after a manual edit | `./nginx/reload-nginx.sh` |
-| Force-regenerate the default TLS cert | `./ensure-default-tls.sh --force` |
-| See CLI-equivalent reference without the menu | `./menu.sh --cheatsheet` |
+| Do anything interactively | `./bin/menu.sh` |
+| First-time host setup | `./bin/bootstrap.sh` |
+| Add a new site | `./bin/provision-site.sh <fqdn>` |
+| Remove a site | `./bin/deprovision-site.sh <fqdn>` |
+| See every provisioned site + drift | `./bin/list-sites.sh` |
+| Confirm containers are wired correctly | `./bin/verify-networks.sh` |
+| Reload nginx config after a manual edit | `./bin/reload-nginx.sh` |
+| Force-regenerate the default TLS cert | `./bin/ensure-default-tls.sh --force` |
+| See CLI-equivalent reference without the menu | `./bin/menu.sh --cheatsheet` |
 
 All commands run from `srv/portal/`. Every script sources `_lib.sh` for shared helpers — you don't need to; it's automatic.
 
@@ -46,11 +46,11 @@ Every numbered action delegates to an existing script — menu.sh doesn't reimpl
 
 ### 2.2 Why TTY-only
 
-Every `read` in `menu.sh` goes through `/dev/tty` rather than stdin. This means **piped input cannot bypass confirmation prompts**. A would-be caller can't `echo "y" | ./menu.sh` past the deprovision confirmation — the read still blocks on the terminal.
+Every `read` in `menu.sh` goes through `/dev/tty` rather than stdin. This means **piped input cannot bypass confirmation prompts**. A would-be caller can't `echo "y" | ./bin/menu.sh` past the deprovision confirmation — the read still blocks on the terminal.
 
 This is a deliberate safety property: destructive actions (stop stacks, deprovision, regenerate cert) always require human acknowledgement at a real terminal. If you're trying to automate, use the underlying scripts directly — that's what they're there for.
 
-When invoked without a TTY, menu.sh prints a clear error and exits 1. Exception: `./menu.sh --cheatsheet` prints the CLI-equivalent reference non-interactively, for use in docs or SSH non-interactive sessions.
+When invoked without a TTY, menu.sh prints a clear error and exits 1. Exception: `./bin/menu.sh --cheatsheet` prints the CLI-equivalent reference non-interactively, for use in docs or SSH non-interactive sessions.
 
 ### 2.3 Status banner
 
@@ -78,7 +78,7 @@ Container states come from `docker inspect`, so `absent`/`exited`/`restarting` a
 
 The PID doubles as a session identifier — `grep 'pid=38341'` reconstructs a full operator session.
 
-**Metadata-only by design.** The audit log records what was done, by whom, when, with what exit code. It does not capture command output. Rationale: metadata is grep-friendly and compact; full transcripts balloon quickly and include ANSI escape noise. If you need a full transcript for a specific session: `./menu.sh 2>&1 | tee session-$(date +%s).log`.
+**Metadata-only by design.** The audit log records what was done, by whom, when, with what exit code. It does not capture command output. Rationale: metadata is grep-friendly and compact; full transcripts balloon quickly and include ANSI escape noise. If you need a full transcript for a specific session: `./bin/menu.sh 2>&1 | tee session-$(date +%s).log`.
 
 **Logging failures never block operator work.** If the log directory isn't writable (permissions issue, read-only FS, etc.), menu.sh prints a one-time warning and continues silently without logging.
 
@@ -141,7 +141,7 @@ One section per script. Each covers: purpose, typical invocation, inputs/outputs
 
 **Ordering note:** acme.json preflight and TLS cert generation happen first because they don't require Docker. Network creation last because it does. This means `bootstrap.sh` runs to completion in two phases: all non-Docker work unconditionally, then Docker-dependent work if available.
 
-**Typical invocation:** `./bootstrap.sh` — no flags. Always full sequence.
+**Typical invocation:** `./bin/bootstrap.sh` — no flags. Always full sequence.
 
 ### 4.2 `create-docker-networks.sh`
 
@@ -174,9 +174,9 @@ One section per script. Each covers: purpose, typical invocation, inputs/outputs
 
 **Typical invocations:**
 ```bash
-./ensure-default-tls.sh              # idempotent refresh/check
-./ensure-default-tls.sh --force      # unconditional regenerate
-./ensure-default-tls.sh --cn company.internal --days 365 --key-size 4096
+./bin/ensure-default-tls.sh              # idempotent refresh/check
+./bin/ensure-default-tls.sh --force      # unconditional regenerate
+./bin/ensure-default-tls.sh --cn company.internal --days 365 --key-size 4096
 ```
 
 ### 4.4 `verify-networks.sh`
@@ -219,11 +219,11 @@ One section per script. Each covers: purpose, typical invocation, inputs/outputs
 
 **Typical invocations:**
 ```bash
-./list-sites.sh                                  # table
-./list-sites.sh --probe                          # + live reachability
-./list-sites.sh --probe --probe-host 203.0.113.1 # probe off-host
-./list-sites.sh --drift-only                     # only broken sites
-./list-sites.sh --format json | jq '.[] | select(.drift=="yes")'
+./bin/list-sites.sh                                  # table
+./bin/list-sites.sh --probe                          # + live reachability
+./bin/list-sites.sh --probe --probe-host 203.0.113.1 # probe off-host
+./bin/list-sites.sh --drift-only                     # only broken sites
+./bin/list-sites.sh --format json | jq '.[] | select(.drift=="yes")'
 ```
 
 ### 4.6 `provision-site.sh`
@@ -235,7 +235,7 @@ One section per script. Each covers: purpose, typical invocation, inputs/outputs
 2. `nginx/sites/<fqdn>/index.html` — placeholder landing page
 3. `traefik/dynamic/<fqdn>.yml` — Traefik router on `websecure` with `security-headers@file` + `rate-limit@file` middlewares and the `letsencrypt` cert resolver
 
-**Stance: one-shot.** Refuses to proceed if any of the three target paths already exist. This is deliberate — the content directory may contain deployed data, and silently overwriting is worse than a hard stop. To re-provision: `./deprovision-site.sh <fqdn> --keep-content` first.
+**Stance: one-shot.** Refuses to proceed if any of the three target paths already exist. This is deliberate — the content directory may contain deployed data, and silently overwriting is worse than a hard stop. To re-provision: `./bin/deprovision-site.sh <fqdn> --keep-content` first.
 
 **Rollback on failure.** An `EXIT` trap removes any artifacts the script itself created if it exits non-zero before the success marker (e.g., `nginx -t` failure). The trap is armed *after* the refuse-to-overwrite check, so an idempotency refusal can't wipe pre-existing files. The rollback is safe to `rm -rf` the site dir only because the overwrite guard prevents re-running over a populated site — if the guard is ever relaxed, the rollback must be tightened in lockstep.
 
@@ -255,9 +255,9 @@ One section per script. Each covers: purpose, typical invocation, inputs/outputs
 
 **Typical invocation:**
 ```bash
-./provision-site.sh myapp.example.com
-./provision-site.sh spa.example.com --spa
-./provision-site.sh batch.example.com --no-reload   # then reload once at the end
+./bin/provision-site.sh myapp.example.com
+./bin/provision-site.sh spa.example.com --spa
+./bin/provision-site.sh batch.example.com --no-reload   # then reload once at the end
 ```
 
 ### 4.7 `deprovision-site.sh`
@@ -283,13 +283,13 @@ One section per script. Each covers: purpose, typical invocation, inputs/outputs
 
 **Typical invocations:**
 ```bash
-./deprovision-site.sh old.example.com --dry-run   # preview
-./deprovision-site.sh old.example.com             # interactive, types FQDN
-./deprovision-site.sh old.example.com --yes       # non-interactive
-./deprovision-site.sh old.example.com --yes --keep-content
+./bin/deprovision-site.sh old.example.com --dry-run   # preview
+./bin/deprovision-site.sh old.example.com             # interactive, types FQDN
+./bin/deprovision-site.sh old.example.com --yes       # non-interactive
+./bin/deprovision-site.sh old.example.com --yes --keep-content
 ```
 
-### 4.8 `nginx/reload-nginx.sh`
+### 4.8 `bin/reload-nginx.sh`
 
 **Purpose:** test-and-graceful-reload the nginx container. Thin wrapper around `_lib.sh::nginx_reload`.
 
@@ -327,19 +327,19 @@ list-sites.sh
 verify-networks.sh
  └── _lib.sh (log_*)
 
-nginx/reload-nginx.sh
+bin/reload-nginx.sh
  └── _lib.sh (nginx_reload, log_*)
 
-menu.sh
- ├── bootstrap.sh                   # action 1
- ├── ensure-default-tls.sh --force  # action 2
- ├── docker compose (both stacks)   # actions 3,4,5
- ├── verify-networks.sh             # action 6
- ├── list-sites.sh [flags]          # actions 7,8,9
- ├── provision-site.sh [flags]      # action 10
- ├── deprovision-site.sh [flags]    # action 11
- ├── nginx/reload-nginx.sh          # action 12
- ├── docker compose logs            # actions 13-16
+bin/menu.sh
+ ├── bin/bootstrap.sh                   # action 1
+ ├── bin/ensure-default-tls.sh --force  # action 2
+ ├── docker compose (both stacks)       # actions 3,4,5
+ ├── bin/verify-networks.sh             # action 6
+ ├── bin/list-sites.sh [flags]          # actions 7,8,9
+ ├── bin/provision-site.sh [flags]      # action 10
+ ├── bin/deprovision-site.sh [flags]    # action 11
+ ├── bin/reload-nginx.sh                # action 12
+ ├── docker compose logs                # actions 13-16
  └── _lib.sh (everything)
 ```
 
@@ -357,18 +357,18 @@ git clone <repo-url> /srv/portal-src         # or /srv/ai/portal-src, /opt/porta
 cd /srv/portal-src
 
 # 2. (Option A) Run bootstrap directly
-./srv/portal/bootstrap.sh
+./srv/portal/bin/bootstrap.sh
 
 # 2. (Option B) Run bootstrap through the menu and get the audit log
-cd srv/portal && ./menu.sh   # pick option 1
+cd srv/portal && ./bin/menu.sh   # pick option 1
 
 # 3. Start stacks (nginx first)
 docker compose -f srv/portal/nginx/docker-compose.yml up -d
 docker compose -f srv/portal/docker-compose.yml up -d
 
 # 4. Verify
-./srv/portal/verify-networks.sh
-./srv/portal/list-sites.sh
+./srv/portal/bin/verify-networks.sh
+./srv/portal/bin/list-sites.sh
 ```
 
 ### 6.2 Onboard a new site (static)
@@ -378,7 +378,7 @@ docker compose -f srv/portal/docker-compose.yml up -d
 dig +short myapp.example.com    # should return the host's public IP
 
 # 2. Provision — creates 3 artifacts, reloads nginx
-./srv/portal/provision-site.sh myapp.example.com
+./srv/portal/bin/provision-site.sh myapp.example.com
 # (add --spa if it's a client-side-routed SPA)
 
 # 3. Deploy content (target is $PORTAL_DIR/nginx/sites/<fqdn>/)
@@ -388,14 +388,14 @@ rsync -av myapp/dist/ ./srv/portal/nginx/sites/myapp.example.com/
 curl -I https://myapp.example.com/
 
 # 5. Confirm
-./srv/portal/list-sites.sh --probe   # LIVE=yes, HTTPS=2xx
+./srv/portal/bin/list-sites.sh --probe   # LIVE=yes, HTTPS=2xx
 ```
 
 ### 6.3 Onboard a new site (dynamic container)
 
 ```bash
 # 1. DNS + provision as above
-./srv/portal/provision-site.sh myapp.example.com --no-reload
+./srv/portal/bin/provision-site.sh myapp.example.com --no-reload
 # --no-reload because we'll replace the Traefik yaml below
 
 # 2. Drop the app's compose file at srv/portal/apps/myapp/docker-compose.yml
@@ -428,10 +428,10 @@ docker compose -f srv/portal/apps/myapp/docker-compose.yml up -d
 #    is served by the container, not nginx
 rm srv/portal/nginx/conf.d/myapp.example.com.conf
 rm -rf srv/portal/nginx/sites/myapp.example.com
-./srv/portal/nginx/reload-nginx.sh
+./srv/portal/bin/reload-nginx.sh
 
 # 6. Verify
-./srv/portal/list-sites.sh --probe
+./srv/portal/bin/list-sites.sh --probe
 ```
 
 Note: the current `provision-site.sh` assumes the nginx-served case. Dynamic-container sites require manual adjustment of steps 3 and 5. If you onboard many dynamic apps, a `provision-dynamic-site.sh` variant would be a reasonable addition (see § 10).
@@ -440,29 +440,29 @@ Note: the current `provision-site.sh` assumes the nginx-served case. Dynamic-con
 
 ```bash
 # 1. Preview
-./srv/portal/deprovision-site.sh myapp.example.com --dry-run
+./srv/portal/bin/deprovision-site.sh myapp.example.com --dry-run
 
 # 2. Remove (interactive — type the FQDN to confirm)
-./srv/portal/deprovision-site.sh myapp.example.com
+./srv/portal/bin/deprovision-site.sh myapp.example.com
 
 # 3. Keep the content but remove configs
-./srv/portal/deprovision-site.sh myapp.example.com --yes --keep-content
+./srv/portal/bin/deprovision-site.sh myapp.example.com --yes --keep-content
 ```
 
 ### 6.5 Investigate drift
 
 ```bash
 # Table view of all sites
-./srv/portal/list-sites.sh
+./srv/portal/bin/list-sites.sh
 
 # Only broken ones
-./srv/portal/list-sites.sh --drift-only
+./srv/portal/bin/list-sites.sh --drift-only
 
 # With probes (requires running stacks)
-./srv/portal/list-sites.sh --probe
+./srv/portal/bin/list-sites.sh --probe
 
 # JSON for scripting
-./srv/portal/list-sites.sh --format json | jq '.[] | select(.drift=="yes")'
+./srv/portal/bin/list-sites.sh --format json | jq '.[] | select(.drift=="yes")'
 ```
 
 Common drift patterns:
@@ -476,10 +476,10 @@ Fix options: re-provision (if you want the site back) or deprovision to clean up
 
 ```bash
 # Check current expiry
-./srv/portal/ensure-default-tls.sh    # will auto-regenerate if within 30 days
+./srv/portal/bin/ensure-default-tls.sh    # will auto-regenerate if within 30 days
 
 # Force now (e.g., if you changed the CN or key size)
-./srv/portal/ensure-default-tls.sh --force
+./srv/portal/bin/ensure-default-tls.sh --force
 
 # Traefik picks up the new cert automatically via file-watch on dynamic/
 ```
@@ -488,10 +488,10 @@ Fix options: re-provision (if you want the site back) or deprovision to clean up
 
 ```bash
 # 1. Check container states
-./srv/portal/verify-networks.sh
+./srv/portal/bin/verify-networks.sh
 
 # 2. Check drift
-./srv/portal/list-sites.sh --drift-only
+./srv/portal/bin/list-sites.sh --drift-only
 
 # 3. Check Traefik for routing errors
 docker compose -f srv/portal/docker-compose.yml logs --tail=100 traefik | grep -iE 'error|acme'
@@ -517,9 +517,9 @@ grep 'exit=[1-9]' srv/portal/logs/menu.log   # non-zero exits only
 
 # Then operate it via env overrides:
 NGINX_CONTAINER=staging-nginx TRAEFIK_CONTAINER=staging-traefik \
-    ./srv/portal/verify-networks.sh
+    ./srv/portal/bin/verify-networks.sh
 
-NGINX_CONTAINER=staging-nginx ./srv/portal/provision-site.sh staging.example.com
+NGINX_CONTAINER=staging-nginx ./srv/portal/bin/provision-site.sh staging.example.com
 ```
 
 Every script that `docker exec`s into nginx or Traefik honors these overrides. `verify-networks.sh`, `list-sites.sh`, `provision-site.sh`, `deprovision-site.sh`, and `reload-nginx.sh` all plumb them through.
@@ -602,7 +602,7 @@ Benign. Means Docker isn't up yet (typical during host bootstrap) or you've stop
 
 ```bash
 docker compose -f nginx/docker-compose.yml up -d
-./nginx/reload-nginx.sh
+./bin/reload-nginx.sh
 ```
 
 ### 9.2 "another provision/deprovision is running — refusing to proceed"
@@ -622,7 +622,7 @@ Docker auto-created the path. Happens when `docker compose up` ran before `boots
 
 ```bash
 sudo rm -rf srv/portal/traefik/acme.json
-./srv/portal/bootstrap.sh
+./srv/portal/bin/bootstrap.sh
 docker compose down && docker compose up -d
 ```
 
@@ -632,7 +632,7 @@ Same class of failure: Docker auto-created the path as root-owned. Recovery is i
 
 ```bash
 sudo rm -rf srv/portal/traefik/certs
-./srv/portal/ensure-default-tls.sh
+./srv/portal/bin/ensure-default-tls.sh
 ```
 
 ### 9.5 Site provisions but gets 404 from Traefik
@@ -767,7 +767,7 @@ Reference from per-site routers as `my-thing@file`.
 Not enforced yet in CI but recommended:
 
 ```bash
-for f in srv/portal/*.sh srv/portal/nginx/*.sh srv/portal/_lib.sh; do
+for f in srv/portal/*.sh srv/portal/nginx/*.sh srv/portal/bin/_lib.sh; do
     shellcheck "$f"
 done
 ```
@@ -780,8 +780,7 @@ Most findings from the two quality-review passes have been addressed; the remain
 
 | Purpose | Path |
 |---|---|
-| All scripts | `srv/portal/*.sh` + `srv/portal/nginx/reload-nginx.sh` |
-| Shared library | `srv/portal/_lib.sh` |
+| All scripts + shared library | `srv/portal/bin/*.sh` (includes `_lib.sh`) |
 | Traefik static config | `srv/portal/traefik/traefik.yml` |
 | Traefik dynamic shared | `srv/portal/traefik/dynamic/_*.yml` |
 | Traefik dynamic per-site | `srv/portal/traefik/dynamic/<fqdn>.yml` |

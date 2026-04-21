@@ -21,7 +21,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=_lib.sh
 source "${SCRIPT_DIR}/_lib.sh"
-ACME_FILE="${SCRIPT_DIR}/traefik/acme.json"
+# $PORTAL_DIR is exported by _lib.sh (one level above bin/).
+ACME_FILE="${PORTAL_DIR}/traefik/acme.json"
 
 # Script-specific helper; others inherited from _lib.sh.
 log_step() { printf "\n${BOLD}==> %s${RESET}\n" "$*"; }
@@ -78,10 +79,10 @@ cat <<EOF
 Next steps:
 
   # 1. Start nginx first so Traefik finds a ready backend
-  docker compose -f "${SCRIPT_DIR}/nginx/docker-compose.yml" up -d
+  docker compose -f "${PORTAL_DIR}/nginx/docker-compose.yml" up -d
 
   # 2. Then Traefik
-  docker compose -f "${SCRIPT_DIR}/docker-compose.yml" up -d
+  docker compose -f "${PORTAL_DIR}/docker-compose.yml" up -d
 
   # 3. Verify
   ${SCRIPT_DIR}/verify-networks.sh

@@ -16,8 +16,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=_lib.sh
 source "${SCRIPT_DIR}/_lib.sh"
 
-NGINX_COMPOSE="${SCRIPT_DIR}/nginx/docker-compose.yml"
-TRAEFIK_COMPOSE="${SCRIPT_DIR}/docker-compose.yml"
+# Non-script paths are resolved against $PORTAL_DIR (set by _lib.sh).
+NGINX_COMPOSE="${PORTAL_DIR}/nginx/docker-compose.yml"
+TRAEFIK_COMPOSE="${PORTAL_DIR}/docker-compose.yml"
 NGINX_CONTAINER="${NGINX_CONTAINER:-nginx}"
 TRAEFIK_CONTAINER="${TRAEFIK_CONTAINER:-traefik}"
 
@@ -34,7 +35,7 @@ TRAEFIK_CONTAINER="${TRAEFIK_CONTAINER:-traefik}"
 # Logging failures never crash the menu — if the log dir isn't writable, a
 # one-time warning is printed and subsequent writes are silent no-ops.
 
-LOG_DIR="${SCRIPT_DIR}/logs"
+LOG_DIR="${PORTAL_DIR}/logs"
 LOG_FILE="${LOG_DIR}/menu.log"
 SESSION_ID="$$"
 SESSION_START_EPOCH=$(date +%s)
@@ -99,7 +100,7 @@ run_action() {
 # Exception: --cheatsheet is non-interactive and skips this check.
 if [[ "${1:-}" != "--cheatsheet" ]] && { [[ ! -t 0 ]] || [[ ! -r /dev/tty ]]; }; then
     echo "menu.sh requires an interactive terminal. Invoke the underlying" >&2
-    echo "scripts directly for automation — see './menu.sh --cheatsheet'"   >&2
+    echo "scripts directly for automation — see './bin/menu.sh --cheatsheet'" >&2
     echo "or run option C from the menu on a real TTY."                    >&2
     exit 1
 fi
@@ -165,8 +166,8 @@ stack_status() {
     esac
 
     local site_count=0
-    if [[ -d "${SCRIPT_DIR}/traefik/dynamic" ]]; then
-        site_count=$(find "${SCRIPT_DIR}/traefik/dynamic" -maxdepth 1 -name '*.yml' -type f ! -name '_*' 2>/dev/null | wc -l | tr -d ' ')
+    if [[ -d "${PORTAL_DIR}/traefik/dynamic" ]]; then
+        site_count=$(find "${PORTAL_DIR}/traefik/dynamic" -maxdepth 1 -name '*.yml' -type f ! -name '_*' 2>/dev/null | wc -l | tr -d ' ')
     fi
 
     printf "  Traefik: ${t_color}%s${RESET}    nginx: ${n_color}%s${RESET}    sites: %s\n" \
@@ -254,7 +255,7 @@ action_provision_site() {
     fi
 
     echo
-    log_info "Running: ./provision-site.sh ${args[*]}"
+    log_info "Running: ./bin/provision-site.sh ${args[*]}"
     echo
     "${SCRIPT_DIR}/provision-site.sh" "${args[@]}"
 }
@@ -284,14 +285,14 @@ action_deprovision_site() {
     fi
 
     echo
-    log_info "Running: ./deprovision-site.sh ${args[*]}"
+    log_info "Running: ./bin/deprovision-site.sh ${args[*]}"
     echo
     "${SCRIPT_DIR}/deprovision-site.sh" "${args[@]}"
 }
 
 action_reload_nginx() {
     header "Reload nginx"
-    "${SCRIPT_DIR}/nginx/reload-nginx.sh"
+    "${SCRIPT_DIR}/reload-nginx.sh"
 }
 
 show_logs() {
@@ -325,26 +326,26 @@ action_cheatsheet() {
     header "Equivalent CLI commands"
     cat <<EOF
 Host setup:
-  ./bootstrap.sh                              # full idempotent bootstrap
-  ./ensure-default-tls.sh [--force]           # default TLS cert
-  ./create-docker-networks.sh                 # just the networks
+  ./bin/bootstrap.sh                          # full idempotent bootstrap
+  ./bin/ensure-default-tls.sh [--force]       # default TLS cert
+  ./bin/create-docker-networks.sh             # just the networks
 
 Stacks:
   docker compose -f nginx/docker-compose.yml up -d
   docker compose up -d                        # Traefik
   docker compose down                         # Traefik stop
-  ./verify-networks.sh                        # health check
+  ./bin/verify-networks.sh                    # health check
 
 Sites:
-  ./list-sites.sh [--probe] [--drift-only] [--format json]
-  ./provision-site.sh <fqdn> [--spa] [--no-reload]
-  ./deprovision-site.sh <fqdn> [--dry-run] [--yes] [--keep-content]
-  ./nginx/reload-nginx.sh
+  ./bin/list-sites.sh [--probe] [--drift-only] [--format json]
+  ./bin/provision-site.sh <fqdn> [--spa] [--no-reload]
+  ./bin/deprovision-site.sh <fqdn> [--dry-run] [--yes] [--keep-content]
+  ./bin/reload-nginx.sh
 
 Environment overrides:
-  NGINX_CONTAINER=staging-nginx ./verify-networks.sh
-  TRAEFIK_CONTAINER=staging-traefik ./list-sites.sh --probe
-  TRAEFIK_DYNAMIC_DIR=/opt/dynamic ./provision-site.sh foo.example.com
+  NGINX_CONTAINER=staging-nginx ./bin/verify-networks.sh
+  TRAEFIK_CONTAINER=staging-traefik ./bin/list-sites.sh --probe
+  TRAEFIK_DYNAMIC_DIR=/opt/dynamic ./bin/provision-site.sh foo.example.com
 
 Logs:
   docker compose logs -f traefik
@@ -356,7 +357,7 @@ EOF
 
 show_menu() {
     clear_screen
-    printf "${BOLD}Portal Operations${RESET}    ${DIM}(%s)${RESET}\n" "$SCRIPT_DIR"
+    printf "${BOLD}Portal Operations${RESET}    ${DIM}(%s)${RESET}\n" "$PORTAL_DIR"
     stack_status
     cat <<EOF
 
@@ -393,7 +394,7 @@ EOF
 }
 
 main() {
-    # Non-interactive escape hatch: `./menu.sh --cheatsheet` prints the
+    # Non-interactive escape hatch: `./bin/menu.sh --cheatsheet` prints the
     # equivalent CLI reference and exits. Useful for docs / CI.
     if [[ "${1:-}" == "--cheatsheet" ]]; then
         action_cheatsheet

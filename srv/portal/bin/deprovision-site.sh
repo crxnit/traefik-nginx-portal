@@ -24,10 +24,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=_lib.sh
 source "${SCRIPT_DIR}/_lib.sh"
-NGINX_DIR="${SCRIPT_DIR}/nginx"
+# Non-script paths are resolved against $PORTAL_DIR (set by _lib.sh).
+NGINX_DIR="${PORTAL_DIR}/nginx"
 CONF_D="${NGINX_DIR}/conf.d"
 SITES_DIR="${NGINX_DIR}/sites"
-TRAEFIK_DYNAMIC_DIR="${TRAEFIK_DYNAMIC_DIR:-${SCRIPT_DIR}/traefik/dynamic}"
+TRAEFIK_DYNAMIC_DIR="${TRAEFIK_DYNAMIC_DIR:-${PORTAL_DIR}/traefik/dynamic}"
 NGINX_CONTAINER="${NGINX_CONTAINER:-nginx}"
 
 # --- Script-specific log helper --------------------------------------------
@@ -95,7 +96,7 @@ done
 
 validate_fqdn "$FQDN" || die "Invalid FQDN: '$FQDN'."
 
-acquire_portal_lock "$SCRIPT_DIR"
+acquire_portal_lock "$PORTAL_DIR"
 
 # Paths derived from FQDN
 CONF_FILE="${CONF_D}/${FQDN}.conf"

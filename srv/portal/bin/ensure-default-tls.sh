@@ -26,10 +26,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=_lib.sh
 source "${SCRIPT_DIR}/_lib.sh"
-TRAEFIK_DIR="${SCRIPT_DIR}/traefik"
+# Non-script paths are resolved against $PORTAL_DIR (set by _lib.sh).
+TRAEFIK_DIR="${PORTAL_DIR}/traefik"
 CERTS_DIR="${TRAEFIK_DIR}/certs"
 DYNAMIC_DIR="${TRAEFIK_DIR}/dynamic"
-COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.yml"
+COMPOSE_FILE="${PORTAL_DIR}/docker-compose.yml"
 
 CN="default.invalid"
 DAYS=3650
@@ -178,7 +179,7 @@ fi
 # Prefer `git rev-parse` over a hardcoded relative path so the check keeps
 # working if the repo is ever restructured; fall back to the old assumption
 # when git isn't available or the dir isn't a working tree.
-repo_root=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || echo "${SCRIPT_DIR}/../..")
+repo_root=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || echo "${PORTAL_DIR}/../..")
 gitignore="${repo_root}/.gitignore"
 if [[ -f "$gitignore" ]] && ! grep -q 'traefik/certs' "$gitignore"; then
     log_warn "Private key lives under traefik/certs/ — consider adding to .gitignore:"

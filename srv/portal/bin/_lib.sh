@@ -2,6 +2,7 @@
 # Shared helpers for the portal scripts. Source this file — do NOT invoke it.
 #
 # Provides:
+#   - $PORTAL_DIR global: absolute path to the portal root (parent of bin/)
 #   - TTY-aware color variables (GREEN/YELLOW/RED/BLUE/BOLD/DIM/RESET)
 #   - Standard log helpers: log_info, log_ok, log_warn, log_error, log_skip, die
 #   - validate_fqdn <fqdn>
@@ -11,6 +12,15 @@
 #
 # Scripts are free to add their own specialized helpers on top
 # (e.g. log_step in bootstrap, log_dry in deprovision).
+
+# --- Portal root resolution ------------------------------------------------
+# Every script lives in $PORTAL_DIR/bin/. This file's directory is bin/,
+# so PORTAL_DIR is one level up. Callers reference $PORTAL_DIR for any
+# non-script resource (nginx/, traefik/, compose files, logs/, locks).
+
+_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PORTAL_DIR="$(cd "${_LIB_DIR}/.." && pwd)"
+export PORTAL_DIR
 
 # --- Colors ----------------------------------------------------------------
 
