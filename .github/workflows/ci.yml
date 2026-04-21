@@ -51,6 +51,12 @@ jobs:
   # Secrets scan — catches private keys, API tokens, AWS credentials,
   # etc. that sneak in through a rushed commit. Runs on the full git
   # history, so fetch-depth: 0 is mandatory.
+  #
+  # NOTE: we install gitleaks directly rather than using the
+  # gitleaks-action, because the action's incremental-scan logic
+  # breaks on initial pushes (it tries to scan `<root-commit>^..HEAD`
+  # and fails because root commits have no parent). Direct
+  # invocation via `gitleaks git` handles all cases uniformly.
   gitleaks:
     name: gitleaks
     runs-on: ubuntu-latest
@@ -58,6 +64,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install gitleaks
+        run: |
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz \
+            | sudo tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+      - name: Scan full git history
+        run: gitleaks git --redact -v .
