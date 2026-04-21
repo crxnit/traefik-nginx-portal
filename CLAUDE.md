@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Provisioning scripts and configuration for a two-container web-hosting stack: **Traefik** (TLS termination + routing) in front of **nginx** (serving static sites). One Traefik instance fronts many nginx-hosted sites; each site is provisioned/deprovisioned via shell scripts that write three coordinated artifacts.
 
-All runtime state lives under `srv/portal/` — this repo is intended to be deployed/checked out at `/srv/portal/` on the host.
+All runtime state lives under `srv/portal/` in the repo. The scripts resolve their own directory at runtime (`SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"`), so the repo works at any checkout location: `/srv/portal/`, `/srv/ai/portal/`, `/opt/portal/`, etc. Docker Compose volume mounts are relative (`./traefik/...`), so they follow automatically. Paths like `/srv/portal/` in examples throughout this doc are conventional — substitute your actual path. `$PORTAL_DIR` in prose means "wherever the portal is checked out".
 
 ## Architecture
 

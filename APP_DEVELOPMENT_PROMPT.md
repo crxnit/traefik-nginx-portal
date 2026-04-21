@@ -3,6 +3,8 @@
 > **How to use this document:** Paste the contents into the top of a new LLM session, share with a developer starting a new app, or keep in the repo as a reference. It tells you *exactly* what constraints to design around so the app slots into the existing deployment without rework.
 >
 > **Adapting an existing app?** Use `APP_MIGRATION_PROMPT.md` instead — it focuses on auditing and retrofitting a codebase that already exists. This doc assumes you're starting fresh.
+>
+> **Path convention.** Where this doc mentions `/srv/portal/`, treat it as a conventional example — the portal's scripts resolve their own directory at runtime and work at any checkout path (`/srv/ai/portal/`, `/opt/portal/`, etc.). Operators substitute the real path when running commands.
 
 ---
 
@@ -44,7 +46,7 @@ Your app will run on a single Docker host behind a shared **Traefik + nginx** fr
 
 **How it deploys:**
 1. Operator runs `./provision-site.sh myapp.example.com` on the host.
-2. Your build output gets `rsync`'d into `/srv/portal/nginx/sites/myapp.example.com/`.
+2. Your build output gets `rsync`'d into `$PORTAL_DIR/nginx/sites/myapp.example.com/`.
 3. The shared nginx serves it. No container, no process management.
 
 **Your job:** ensure `npm run build` (or equivalent) produces a self-contained directory with an `index.html` at the root.

@@ -2,6 +2,8 @@
 
 This document explains how the portal is designed: the moving parts, how they interact, and why the scripts are shaped the way they are. For an AI-focused, opinionated version optimized for quick context, see `CLAUDE.md`. For the audit trail of why specific design decisions were made, see `IDEMPOTENCY_AUDIT.md`.
 
+> **Path convention.** Examples in this doc show `/srv/portal/` as the conventional checkout location, but the scripts resolve their own directory at runtime and work at any path — `/srv/ai/portal/`, `/opt/portal/`, or any other are all equivalent. Where a prose passage describes file locations, `$PORTAL_DIR` means "wherever the portal repo lives on your host" — substitute your actual path when running commands. Docker Compose bind mounts use relative paths (`./traefik/...`), so they follow the repo wherever it sits.
+
 ---
 
 ## 1. What the system does
@@ -125,7 +127,7 @@ A site called `example.com` is represented by **exactly three files/directories*
 ├── CLAUDE.md                           # Concise AI-focused context
 ├── IDEMPOTENCY_AUDIT.md                # Audit history + rationale for design decisions
 └── srv/
-    └── portal/                         # Deploys to /srv/portal/ on the host
+    └── portal/                         # Conventionally `$PORTAL_DIR` on the host (e.g., /srv/portal/)
         ├── bootstrap.sh                # One-shot host setup (networks, acme.json, default TLS)
         ├── create-docker-networks.sh   # Network bootstrap (delegated from bootstrap.sh)
         ├── ensure-default-tls.sh       # Self-signed default cert for unknown-SNI requests
@@ -351,6 +353,9 @@ Neither is digest-pinned. If full reproducibility is needed, append `@sha256:...
 ### First-time setup on a fresh host
 
 ```bash
+# Clone target is arbitrary — the scripts self-locate via $BASH_SOURCE.
+# Common choices: /srv/portal-src, /opt/portal, ~/portal. Pick what fits
+# your host layout; the examples below use /srv/portal-src.
 git clone <this-repo> /srv/portal-src
 cd /srv/portal-src
 
@@ -372,8 +377,8 @@ docker compose -f srv/portal/docker-compose.yml up -d
 # Provision (creates 3 artifacts, tests config, reloads nginx)
 ./srv/portal/provision-site.sh example.com
 
-# Deploy real content
-rsync -av build/ /srv/portal/nginx/sites/example.com/
+# Deploy real content into $PORTAL_DIR/nginx/sites/<fqdn>/
+rsync -av build/ ./srv/portal/nginx/sites/example.com/
 
 # First request triggers ACME cert issuance (requires :80 reachable on public IP)
 curl -I https://example.com/
