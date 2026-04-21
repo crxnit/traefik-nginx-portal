@@ -590,6 +590,26 @@ Logrotate config files don't perform shell expansion, so write the literal absol
 
 **Do not commit the log.** `.gitignore` covers `srv/portal/logs/` already.
 
+### Privacy note
+
+The audit log contains identifying metadata that you may not want to share externally:
+
+- `user=<unix-username>` — whoever ran the menu.
+- `host=<short-hostname>` — the machine the menu ran on.
+- `tty=<device>` — the terminal device (e.g., `/dev/pts/0`).
+- `pid=<number>` — the session PID, and indirectly the log's chronology.
+
+This is a feature for *internal* audit and incident forensics — you can grep by user or session to reconstruct what happened. It's a liability if you ship the file elsewhere. Before sharing logs with a vendor, posting snippets in public tickets, or pushing to a centralized log aggregator, scrub the personal fields:
+
+```bash
+# Scrub user, host, and tty. Keeps timestamps, events, pids,
+# actions, exit codes, durations — the forensically-useful bits.
+sed -E 's/ user=[^ ]+/ user=REDACTED/; s/ host=[^ ]+/ host=REDACTED/; s/ tty=[^ ]+/ tty=REDACTED/' \
+    srv/portal/logs/menu.log > menu.log.scrubbed
+```
+
+Same approach in reverse: if your compliance posture requires *more* identifying info (real names, ticket IDs, change-request numbers), wrap `menu.sh` calls with your own `audit_log_context()` that prepends additional fields — `_lib.sh`'s `audit_log` function just writes key=value pairs, so adding fields is a one-line extension.
+
 ---
 
 ## 9. Troubleshooting
