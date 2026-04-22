@@ -46,13 +46,16 @@ INSTALL_LOG=""
 # --- Colors ----------------------------------------------------------------
 
 setup_colors() {
+    # ANSI-C quoting ($'...') stores the actual ESC byte, not the literal
+    # 4-char `\033` sequence. Required so the final banner's heredoc renders
+    # colors; `cat` doesn't interpret `\033` the way printf does.
     if [ -t 1 ]; then
-        GREEN='\033[0;32m'
-        YELLOW='\033[0;33m'
-        RED='\033[0;31m'
-        BLUE='\033[0;34m'
-        BOLD='\033[1m'
-        RESET='\033[0m'
+        GREEN=$'\033[0;32m'
+        YELLOW=$'\033[0;33m'
+        RED=$'\033[0;31m'
+        BLUE=$'\033[0;34m'
+        BOLD=$'\033[1m'
+        RESET=$'\033[0m'
     else
         GREEN=''; YELLOW=''; RED=''; BLUE=''; BOLD=''; RESET=''
     fi
