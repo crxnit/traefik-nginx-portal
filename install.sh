@@ -219,9 +219,13 @@ handle_sigint() {
 
 handle_exit() {
     local code=$?
-    if [ "$code" -ne 0 ] && [ "$CLONE_STARTED" -eq 1 ]; then
-        log_warn "Install failed after the repo was cloned into: $INSTALL_DIR"
-        log_warn "Not auto-deleting. Inspect the directory, then remove manually if undesired:"
+    # Only warn if phase 4 started AND actually created the install dir.
+    # If `git clone` failed before creating the target (e.g., no write
+    # permission on the parent), there's nothing to inspect and the old
+    # message was misleading.
+    if [ "$code" -ne 0 ] && [ "$CLONE_STARTED" -eq 1 ] && [ -d "$INSTALL_DIR" ]; then
+        log_warn "Installer exited with a partial install directory: $INSTALL_DIR"
+        log_warn "Not auto-deleting. Inspect it, then remove manually if undesired:"
         log_warn "  sudo rm -rf \"$INSTALL_DIR\""
     fi
 }
