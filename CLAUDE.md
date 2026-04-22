@@ -33,7 +33,7 @@ If any one of these is missing, `list-sites.sh` reports **drift**. The provision
 
 ### Shared script helpers
 
-`srv/portal/bin/_lib.sh` is sourced by every script in the portal (all 8 of them). It provides the shared vocabulary so scripts stay terse and consistent:
+`srv/portal/bin/_lib.sh` is sourced by every other script in `bin/`. It provides the shared vocabulary so scripts stay terse and consistent. Intentionally has no shebang — it's a library, sourced not invoked; uses a `# shellcheck shell=bash` directive instead so shellcheck still knows the dialect. Exports `$PORTAL_DIR` (the absolute path of the portal root, computed at source time); callers use `$PORTAL_DIR` for non-script paths (`nginx/`, `traefik/`, compose files, `logs/`, the lock file) and `$SCRIPT_DIR` for invoking sibling scripts.
 
 **Colors (TTY-aware; empty strings when output is piped):** `GREEN`, `YELLOW`, `RED`, `BLUE`, `BOLD`, `DIM`, `RESET`.
 
@@ -60,6 +60,18 @@ Underscore-prefixed YAML files in `traefik/dynamic/` are shared config, skipped 
 Client → Traefik :443 (terminates TLS, matches `Host()` rule from a `dynamic/<fqdn>.yml`) → routes over the `edge` network to the `nginx-backend` service (defined in `_shared-services.yml`) → nginx matches `server_name` in `conf.d/<fqdn>.conf` → serves from `/var/www/<fqdn>/`. nginx trusts `X-Forwarded-For` from `172.16.0.0/12`, `10.0.0.0/8`, and `192.168.0.0/16` (all RFC1918 Docker ranges) via `set_real_ip_from`.
 
 Plain HTTP (:80) is configured to redirect everything to `websecure`. TLS options pin TLS 1.2+ and an explicit cipher suite list.
+
+## Repository posture
+
+Public repo at **github.com/crxnit/traefik-nginx-portal**, protected by a ruleset scoped to `main`:
+
+- **Signed commits required.** SSH signing config lives in `.git/config` (repo-local: `gpg.format = ssh`, `user.signingkey = ~/.ssh/id_rsa.pub`, `commit.gpgsign = true`). Pushing requires the signing key registered as an **SSH signing key** (not just auth) on the pusher's GitHub account, **and** the commit's author email verified on that same account. Unsigned commits are rejected at the server.
+- **Direct pushes to `main` blocked.** Changes land via PR only. Rules: linear history, signed commits, PR review, CODEOWNERS approval. Admins (just `@crxnit`) can bypass for PR merges — `gh pr merge <n> --admin --squash --delete-branch` is the incantation.
+- **CI must be green.** `.github/workflows/ci.yml` runs on every push + PR: `bash -n` on ubuntu-latest AND macos-latest (bash 3.2 compat check), `shellcheck --severity=warning`, and `gitleaks git` over full history.
+- **Pre-commit hooks fire on `git commit`.** `.pre-commit-config.yaml`: gitleaks, shellcheck, trailing-whitespace, EOF newline, YAML parse, shebang consistency. Install per clone: `pip install pre-commit && pre-commit install`.
+- **Dependabot opens weekly PRs** for GitHub Actions versions and Docker image pins. Minor/patch only for images (major bumps left manual); all bumps welcomed for Actions.
+
+Things that will be rejected: `:latest` or unpinned images, unsigned commits, bash-4-only constructs like `${var,,}` (caught by macOS bash-3.2 syntax CI), new secrets in commits (caught by gitleaks).
 
 ## Common commands
 
@@ -108,6 +120,21 @@ NGINX_CONTAINER=staging-nginx TRAEFIK_CONTAINER=staging-traefik ./bin/verify-net
 ```
 
 No build, no tests, no linter — this is purely shell + config.
+
+## Server installer
+
+`install.sh` at the repo root is a single downloadable script for initial host setup. Distinct from `bin/bootstrap.sh` (which re-runs setup steps on an already-cloned repo), `install.sh` clones the repo, patches the ACME email in `traefik/traefik.yml`, runs `bootstrap.sh`, brings up both compose stacks, and optionally provisions a first site — all from an interactive prompt flow. Intended use: `curl ... | bash` on a fresh Linux server.
+
+```bash
+# On a fresh production server:
+curl -fsSL https://raw.githubusercontent.com/crxnit/traefik-nginx-provisioning-scripts/main/install.sh | bash
+# or download first:
+curl -fsSL https://raw.githubusercontent.com/crxnit/traefik-nginx-provisioning-scripts/main/install.sh -o install.sh && bash install.sh
+```
+
+Structure: 7 phases (existing-config guard, dependency checks, prompts, confirm, install, verify, cleanup + final log). Writes a full session log to `/var/log/portal-install-TIMESTAMP.log` (falls back to `$HOME/` if unwritable) and emits syslog entries via `logger -t portal-install` at each phase. Exits 0 without changes if an existing installation is detected (running `nginx`/`traefik` container, `traefik`/`edge` network, or populated `$INSTALL_DIR/srv/portal/`). When curl-piped, reopens stdin from `/dev/tty` so prompts still work.
+
+**CI scope gap (know before editing):** `.github/workflows/ci.yml` globs `srv/portal/bin/*.sh` for both `bash -n` and shellcheck, so `install.sh` at the repo root is NOT covered by CI. Keep it bash-3.2-compatible (the installer targets Linux servers at runtime, but the source must still parse under macOS bash 3.2 to match the house rule) and shellcheck-clean manually. The one intentional `# shellcheck disable=SC2086` is on `$spa_flag` in phase 4.
 
 ## Conventions
 
