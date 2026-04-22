@@ -122,7 +122,8 @@ validate_fqdn_inline() {
 }
 
 # prompt_with_default VAR_NAME "prompt text" "default"
-# Bash 3.2 has no nameref (`declare -n`), so we eval-assign.
+# Uses `printf -v` (bash 3.1+) so we avoid eval and the quoting hazards
+# that come with it; var_name is operator-controlled, not user input.
 prompt_with_default() {
     local var_name="$1"
     local prompt_text="$2"
@@ -135,8 +136,7 @@ prompt_with_default() {
     fi
     IFS= read -r answer || answer=""
     [ -z "$answer" ] && answer="$default_value"
-    # Quote to survive spaces; var_name is operator-controlled (not user input).
-    eval "$var_name=\$answer"
+    printf -v "$var_name" '%s' "$answer"
 }
 
 # prompt_yes_no VAR_NAME "prompt text" "yes|no"
@@ -151,14 +151,16 @@ prompt_yes_no() {
         [ -z "$answer" ] && answer="$default_value"
         answer="$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')"
         case "$answer" in
-            y|yes) eval "$var_name=yes"; return 0 ;;
-            n|no)  eval "$var_name=no";  return 0 ;;
+            y|yes) printf -v "$var_name" 'yes'; return 0 ;;
+            n|no)  printf -v "$var_name" 'no';  return 0 ;;
             *)     printf '  Please answer yes or no.\n' ;;
         esac
     done
 }
 
-# df -k walks up until we find an existing ancestor.
+# df -k walks up until we find an existing ancestor. One df invocation
+# feeds both fields; we verify the size is numeric before comparing, so
+# a df output change doesn't silently skip the warning.
 check_disk_space() {
     local dir="$1"
     local probe="$dir"
@@ -166,11 +168,18 @@ check_disk_space() {
         probe="$(dirname "$probe")"
     done
     [ -d "$probe" ] || probe="/"
-    local avail
-    avail="$(df -k "$probe" | awk 'NR==2 {print $4}')"
-    if [ -z "$avail" ] || [ "$avail" -lt "$MIN_DISK_KB" ] 2>/dev/null; then
-        log_warn "Less than 2 GB free on $(df -k "$probe" | awk 'NR==2 {print $6}'). Installation may fail."
-    fi
+    local avail="" mount=""
+    read -r avail mount < <(df -k "$probe" | awk 'NR==2 {print $4, $6}')
+    case "$avail" in
+        ''|*[!0-9]*)
+            log_warn "Could not determine free disk space on $probe."
+            ;;
+        *)
+            if [ "$avail" -lt "$MIN_DISK_KB" ]; then
+                log_warn "Less than 2 GB free on ${mount:-$probe}. Installation may fail."
+            fi
+            ;;
+    esac
 }
 
 # Prefer `docker compose` (v2 plugin); fall back to legacy `docker-compose`.
@@ -187,6 +196,17 @@ docker_compose_cmd() {
 # in one place.
 run_in_portal() {
     ( cd "${INSTALL_DIR}/srv/portal" && "$@" )
+}
+
+# Probe a URL and return just its HTTP status code (or 000 on failure).
+# Second arg is an optional extra curl flag (e.g. -k for the HTTPS probe
+# while Traefik is still serving the self-signed default cert).
+probe_http() {
+    local url="$1"
+    local extra="${2:-}"
+    # shellcheck disable=SC2086  # extra is empty or a single short flag
+    curl -s -o /dev/null -w '%{http_code}' --max-time 10 $extra "$url" \
+        || printf '000'
 }
 
 # --- Trap handlers ---------------------------------------------------------
@@ -370,6 +390,16 @@ phase4_install() {
     fi
 
     log_step "Cloning repository"
+    # Phase 0 only checked the default INSTALL_DIR. Now that the operator's
+    # chosen path is final, refuse to clone into a non-empty directory so
+    # `git clone` doesn't fail later with its opaque "not an empty directory"
+    # error after the user has already confirmed.
+    if [ -d "$INSTALL_DIR" ] && [ -n "$(ls -A "$INSTALL_DIR" 2>/dev/null)" ]; then
+        log_error "Install directory is not empty: $INSTALL_DIR"
+        log_error "Remove its contents or choose a different directory, then re-run."
+        syslog_event "Install dir not empty pre-clone: $INSTALL_DIR"
+        exit 1
+    fi
     syslog_event "Cloning $REPO_URL -> $INSTALL_DIR"
     CLONE_STARTED=1
     git clone "$REPO_URL" "$INSTALL_DIR"
@@ -429,7 +459,7 @@ phase5_verify() {
 
     if [ -n "$INITIAL_FQDN" ]; then
         local http_code https_code
-        http_code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://${INITIAL_FQDN}/" || printf '000')"
+        http_code="$(probe_http "http://${INITIAL_FQDN}/")"
         if [ "$http_code" = "301" ]; then
             log_info "HTTP probe $INITIAL_FQDN: 301 (redirect to HTTPS — expected)"
             curl_rc="PASS"
@@ -437,7 +467,7 @@ phase5_verify() {
             log_warn "HTTP probe $INITIAL_FQDN: $http_code (expected 301)"
             curl_rc="WARN"
         fi
-        https_code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 "https://${INITIAL_FQDN}/" || printf '000')"
+        https_code="$(probe_http "https://${INITIAL_FQDN}/" -k)"
         case "$https_code" in
             200|301|302) log_info "HTTPS probe $INITIAL_FQDN: $https_code" ;;
             *) log_warn "HTTPS probe $INITIAL_FQDN: $https_code (ACME may still be issuing the cert)" ;;
