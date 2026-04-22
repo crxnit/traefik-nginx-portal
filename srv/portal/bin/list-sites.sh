@@ -132,9 +132,14 @@ for k in "${!nginx_fqdns[@]}"   ; do all_fqdns["$k"]=1; done
 for k in "${!content_fqdns[@]}" ; do all_fqdns["$k"]=1; done
 for k in "${!traefik_fqdns[@]}" ; do all_fqdns["$k"]=1; done
 
-# Sorted list
+# Sorted list. Filter empty lines: when all_fqdns has no keys,
+# `printf '%s\n' "${!all_fqdns[@]}"` still emits one empty line (printf
+# cycles its format string once even with zero data args), which would
+# slip an empty-string element into sorted_fqdns and blow up the main
+# loop below on ${nginx_fqdns[""]} with "bad array subscript".
 sorted_fqdns=()
 while IFS= read -r fqdn; do
+    [[ -z "$fqdn" ]] && continue
     sorted_fqdns+=("$fqdn")
 done < <(printf '%s\n' "${!all_fqdns[@]}" | sort)
 
@@ -168,7 +173,9 @@ fi
 
 # --- Build rows ------------------------------------------------------------
 
-declare -a rows
+# Explicit empty init (not just `declare -a`) so `${#rows[@]}` below
+# doesn't error with "unbound variable" under set -u when no sites exist.
+rows=()
 for fqdn in "${sorted_fqdns[@]}"; do
     has_nginx="no"
     has_content="no"
