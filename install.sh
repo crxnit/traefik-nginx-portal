@@ -169,7 +169,6 @@ prompt_yes_no() {
 # a bare "Permission denied" four phases later.
 check_install_dir_writable() {
     local dir="$1"
-    # Reject any non-absolute path up front — later code assumes absolute.
     case "$dir" in
         /*) ;;
         *) log_error "Install directory must be an absolute path: $dir"
@@ -177,9 +176,7 @@ check_install_dir_writable() {
     esac
 
     if [ -d "$dir" ]; then
-        if [ -w "$dir" ]; then
-            return 0
-        fi
+        [ -w "$dir" ] && return 0
         log_error "Install directory exists but is not writable by $(id -un): $dir"
         log_error "Fix with one of:"
         log_error "  1. sudo chown $(id -un):$(id -gn) $dir"
@@ -194,14 +191,53 @@ check_install_dir_writable() {
         parent="$(dirname "$parent")"
     done
     [ -d "$parent" ] || parent="/"
-    if [ -w "$parent" ]; then
-        return 0
-    fi
+    [ -w "$parent" ] && return 0
     log_error "Cannot create $dir — parent $parent is not writable by $(id -un)."
     log_error "Fix with one of:"
     log_error "  1. sudo mkdir -p $dir && sudo chown $(id -un):$(id -gn) $dir"
     log_error "  2. Choose a different directory under a path you own (e.g. \$HOME/...)"
     return 1
+}
+
+# If $1 isn't currently writable, offer to sudo-fix it interactively.
+# Returns 0 if the dir ends up writable (already was, or the fix worked),
+# 1 if the user declined, sudo is unavailable, or the fix failed.
+ensure_install_dir_writable() {
+    local dir="$1"
+    if check_install_dir_writable "$dir"; then
+        return 0
+    fi
+
+    # Silent no-op if sudo isn't installed — user will retry with a
+    # different path or Ctrl-C out and fix permissions manually.
+    command -v sudo >/dev/null 2>&1 || return 1
+
+    local user group fix_desc
+    user="$(id -un)"
+    group="$(id -gn)"
+    if [ -d "$dir" ]; then
+        fix_desc="sudo chown $user:$group $dir"
+    else
+        fix_desc="sudo mkdir -p $dir && sudo chown $user:$group $dir"
+    fi
+
+    echo
+    log_info "I can run this for you (sudo will prompt for your password if needed):"
+    printf '    %s\n' "$fix_desc"
+    local answer=""
+    prompt_yes_no answer "Run it now?" "no"
+    [ "$answer" = "yes" ] || return 1
+
+    if [ -d "$dir" ]; then
+        sudo chown "$user:$group" "$dir" || { log_error "sudo chown failed."; return 1; }
+    else
+        sudo mkdir -p "$dir" || { log_error "sudo mkdir failed."; return 1; }
+        sudo chown "$user:$group" "$dir" || { log_error "sudo chown failed."; return 1; }
+    fi
+    log_info "Fixed: $dir now owned by $user:$group."
+
+    # Re-check so a partial/no-op sudo command doesn't silently pass.
+    check_install_dir_writable "$dir"
 }
 
 # df -k walks up until we find an existing ancestor. One df invocation
@@ -361,7 +397,7 @@ phase2_interactive_prompts() {
 
     while :; do
         prompt_with_default INSTALL_DIR "Install directory" "$INSTALL_DIR"
-        if check_install_dir_writable "$INSTALL_DIR"; then
+        if ensure_install_dir_writable "$INSTALL_DIR"; then
             break
         fi
         echo
