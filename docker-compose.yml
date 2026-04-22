@@ -30,7 +30,10 @@ services:
       timeout: 3s
       retries: 3
       start_period: 10s
-    restart: unless-stopped
+    # Lifecycle is owned by systemd (see systemd/portal-traefik.service) so
+    # Docker's own restart policy is disabled — keeps the authority in one
+    # place and prevents systemctl stop from racing Docker's auto-restart.
+    restart: "no"
 
 networks:
   traefik:

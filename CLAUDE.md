@@ -19,6 +19,8 @@ Two independent compose stacks that meet on shared Docker networks:
 
 Both networks (`traefik`, `edge`) are declared `external: true` and must exist before either stack starts. Run `bin/bootstrap.sh` once per host — it chains `create-docker-networks.sh`, the `acme.json` preflight (touch + chmod 600), and `ensure-default-tls.sh` in the correct order, and is safe to re-run. Verify wiring with `bin/verify-networks.sh` (expects `traefik → edge,traefik` and `nginx → edge`).
 
+**Lifecycle ownership.** On a production install, both compose stacks are managed by systemd via `systemd/portal-nginx.service` and `systemd/portal-traefik.service` (templates in the repo, installed to `/etc/systemd/system/` by `install.sh`). Each unit is `Type=oneshot` + `RemainAfterExit=yes`, runs `ExecStart=docker compose up -d` as the `portal` service user, and is `enable`d to come up on boot. The compose files set `restart: "no"` — systemd is the single source of authority; Docker's own restart policy is intentionally disabled so `systemctl stop` isn't fighting Docker's auto-restart. `portal-traefik.service` has `Requires=portal-nginx.service` so the backend is up before the edge tries to route.
+
 `acme.json` is not committed — `bootstrap.sh` creates it with mode 600 on demand. Without the preflight, `docker compose up` silently auto-creates the bind-mount path as a root-owned directory, which breaks Traefik permanently; `bootstrap.sh` is how you avoid that class of failure.
 
 ### The three-files-per-site invariant
@@ -75,47 +77,38 @@ Things that will be rejected: `:latest` or unpinned images, unsigned commits, ba
 
 ## Common commands
 
-All commands assume cwd = ``.
+On an install.sh-provisioned host, admins use the `portal` wrapper — it runs each bin/ subcommand as the `portal` service user via `sudo -iu`, so every file written ends up owned by `portal` regardless of which admin triggered the action. Below, `portal <cmd>` and `./bin/<cmd>.sh` are equivalent modulo the identity. Use the wrapper form in prod; the direct form is for local/dev work where the calling user already owns the install dir.
 
 ```bash
-# Interactive menu covering every operator action (wraps the scripts below).
-# Requires a TTY. For non-interactive use, invoke the scripts directly.
-# Writes an audit log to logs/menu.log (gitignored).
+# Wrapper — prod path, runs as service user. Installed at /usr/local/bin/portal
+# by install.sh, symlinking into $INSTALL_DIR/bin/portal.
+portal                                     # interactive menu (default)
+portal menu --cheatsheet                   # non-interactive CLI reference
+portal provision-site <fqdn> [--spa]       # add a site
+portal deprovision-site <fqdn> [--yes]     # remove a site
+portal list-sites [--probe] [--drift-only] # state / reachability
+portal verify-networks                     # container/network wiring check
+portal bootstrap                           # re-run one-shot host setup
+portal reload-nginx                        # test + graceful reload
+
+# Lifecycle (systemd is the authority on an install.sh-provisioned host)
+systemctl status  portal-nginx portal-traefik
+systemctl restart portal-traefik           # nginx has Requires= so starting traefik starts nginx
+systemctl stop    portal-traefik portal-nginx
+journalctl -u portal-traefik -f            # live logs (compose logs still work too)
+
+# Direct-invocation forms — used locally or when developing bin/ scripts.
 ./bin/menu.sh
-./bin/menu.sh --cheatsheet     # non-interactive CLI reference
-
-# Bootstrap (one time, per server) — idempotent; chains the three setup steps
-# and enforces the right order (networks, acme.json preflight, default TLS).
+./bin/menu.sh --cheatsheet
 ./bin/bootstrap.sh
-
-# Start stacks (nginx first so Traefik finds a ready backend on first request)
-docker compose -f nginx/docker-compose.yml up -d   # nginx
-docker compose up -d                     # Traefik
-
-# Verify health
-./bin/verify-networks.sh                     # confirms both containers on correct networks
-./bin/list-sites.sh                          # table: nginx/content/traefik presence per site
-./bin/list-sites.sh --probe                  # adds `nginx -T` check + HTTPS reachability
-./bin/list-sites.sh --probe --probe-host X   # probe from off-host, resolving to Traefik IP X
-./bin/list-sites.sh --drift-only             # show only inconsistent sites
-./bin/list-sites.sh --format json            # machine-readable
-
-# Site lifecycle
-./bin/provision-site.sh <fqdn>               # static site
-./bin/provision-site.sh <fqdn> --spa         # SPA fallback (try_files ... /index.html)
-./bin/provision-site.sh <fqdn> --no-reload   # skip `nginx -t` + reload
-./bin/deprovision-site.sh <fqdn> --dry-run   # preview
-./bin/deprovision-site.sh <fqdn>             # prompts: type the FQDN to confirm
-./bin/deprovision-site.sh <fqdn> --yes --keep-content   # remove configs, keep sites/<fqdn>/
-
-# Manual nginx reload (used by provisioning scripts internally)
+./bin/verify-networks.sh
+./bin/list-sites.sh [--probe [--probe-host X]] [--drift-only] [--format json]
+./bin/provision-site.sh <fqdn> [--spa] [--no-reload] [--traefik-dir DIR]
+./bin/deprovision-site.sh <fqdn> [--dry-run] [--yes] [--keep-content]
 ./bin/reload-nginx.sh
 
-# Override Traefik dynamic dir (env var or flag)
+# Override knobs
 TRAEFIK_DYNAMIC_DIR=/opt/traefik/dynamic ./bin/provision-site.sh ...
-./bin/provision-site.sh <fqdn> --traefik-dir /opt/traefik/dynamic
-
-# Override container names (e.g., running a second portal alongside this one)
 NGINX_CONTAINER=staging-nginx TRAEFIK_CONTAINER=staging-traefik ./bin/verify-networks.sh
 ```
 
@@ -123,7 +116,7 @@ No build, no tests, no linter — this is purely shell + config.
 
 ## Server installer
 
-`install.sh` at the repo root is a single downloadable script for initial host setup. Distinct from `bin/bootstrap.sh` (which re-runs setup steps on an already-cloned repo), `install.sh` clones the repo, patches the ACME email in `traefik/traefik.yml`, runs `bootstrap.sh`, brings up both compose stacks, and optionally provisions a first site — all from an interactive prompt flow. Intended use: `curl ... | bash` on a fresh Linux server.
+`install.sh` at the repo root is a single downloadable script for initial host setup. Distinct from `bin/bootstrap.sh` (which re-runs one-shot host setup on an already-cloned repo), `install.sh` clones the repo, patches the ACME email, creates the service user, chowns the install dir, installs systemd units, runs `bootstrap.sh` as the service user, enables + starts both stacks via systemctl, and optionally provisions a first site — all from an interactive prompt flow. Intended use: `curl ... | bash` on a fresh Linux server.
 
 ```bash
 # On a fresh production server:
@@ -132,9 +125,13 @@ curl -fsSL https://raw.githubusercontent.com/crxnit/traefik-nginx-portal/main/in
 curl -fsSL https://raw.githubusercontent.com/crxnit/traefik-nginx-portal/main/install.sh -o install.sh && bash install.sh
 ```
 
-Structure: 7 phases (existing-config guard, dependency checks, prompts, confirm, install, verify, cleanup + final log). Writes a full session log to `/var/log/portal-install-TIMESTAMP.log` (falls back to `$HOME/` if unwritable) and emits syslog entries via `logger -t portal-install` at each phase. Exits 0 without changes if an existing installation is detected (running `nginx`/`traefik` container, `traefik`/`edge` network, or `$INSTALL_DIR/docker-compose.yml` + `$INSTALL_DIR/bin/` both present). When curl-piped, reopens stdin from `/dev/tty` so prompts still work.
+Structure: 7 phases (existing-config guard, dependency checks, prompts, confirm, install, verify, cleanup + final log). Writes a full session log to `/var/log/portal-install-TIMESTAMP.log` (falls back to `$HOME/` if unwritable) and emits syslog entries via `logger -t portal-install` at each phase. Exits 0 without changes if an existing installation is detected. When curl-piped, reopens stdin from `/dev/tty` so prompts still work.
 
-**CI scope gap (know before editing):** `.github/workflows/ci.yml` globs `bin/*.sh` for both `bash -n` and shellcheck, so `install.sh` at the repo root is NOT covered by CI. Keep it bash-3.2-compatible (the installer targets Linux servers at runtime, but the source must still parse under macOS bash 3.2 to match the house rule) and shellcheck-clean manually. The one intentional `# shellcheck disable=SC2086` is on `$spa_flag` in phase 4.
+**Service-user + systemd model.** install.sh creates a system user (`portal` by default, override via `PORTAL_USER=...`), adds it to the `docker` group, and chowns `$INSTALL_DIR` to it. All subsequent operator actions run as that user — never as the invoking admin. Two systemd units (`portal-nginx.service`, `portal-traefik.service`, templated from `systemd/*.service` in the repo) own the stack lifecycle: enabled at install time so the portal comes back up on reboot. Docker's own `restart:` policy in the compose files is deliberately set to `no` — systemd is the single source of lifecycle authority. If systemd isn't detected (edge case: Alpine containers, chroots), install.sh falls back to plain `docker compose up -d` with a warning.
+
+**Operator wrapper.** A `bin/portal` script in the repo, symlinked to `/usr/local/bin/portal` at install time, runs any `bin/<cmd>.sh` as the service user via `sudo -iu $PORTAL_USER`. Admins type `portal menu`, `portal provision-site <fqdn>`, `portal verify-networks`, etc. — short commands map to the full script names. This keeps audit trails clean (every write is owned by `portal`, regardless of which admin triggered it) and means removing an admin from `sudoers` is sufficient offboarding.
+
+**CI coverage.** `.github/workflows/ci.yml` globs `bin/*.sh` + `install.sh` for both `bash -n` and shellcheck. Keep new/edited scripts bash-3.2-compatible (macOS bash-3.2 runs the syntax check) and shellcheck-clean. The intentional `# shellcheck disable=SC2086` comments are on `$spa_flag` and `$DC_CMD` in phase 4 where word-splitting is required.
 
 ## Conventions
 

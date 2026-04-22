@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+#
+# portal — operator wrapper that runs any bin/ subcommand as the portal
+# service user.
+#
+# The portal stack is owned by a dedicated system user (default: 'portal')
+# that has docker-group membership and owns every artifact under the
+# install directory. Admins drop down into that identity on demand via
+# sudo, so audit trails stay clean and no operator's personal account is
+# the source of truth for portal state.
+#
+# Usage:
+#   portal                                  # interactive menu (default)
+#   portal menu                             # same as above, explicit
+#   portal provision-site <fqdn> [--spa]    # add a site
+#   portal deprovision-site <fqdn>          # remove a site
+#   portal list-sites [--probe]             # show portal state
+#   portal verify-networks                  # container/network wiring check
+#   portal bootstrap                        # re-run one-shot host setup
+#   portal reload-nginx                     # test + graceful reload
+#
+# Any executable script under $PORTAL_DIR/bin/ named <cmd>.sh can be
+# invoked as `portal <cmd>`. No allowlist — the wrapper just proxies.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PORTAL_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PORTAL_USER="${PORTAL_USER:-portal}"
+
+cmd="${1:-menu}"
+shift || true
+
+# Strip a trailing .sh if the operator typed it in the habit from older docs.
+cmd="${cmd%.sh}"
+
+script="${PORTAL_DIR}/bin/${cmd}.sh"
+if [ ! -f "$script" ]; then
+    printf 'portal: no such command: %s\n' "$cmd" >&2
+    printf 'Known commands: look under %s/bin/*.sh\n' "$PORTAL_DIR" >&2
+    exit 1
+fi
+if [ ! -x "$script" ]; then
+    printf 'portal: %s is not executable\n' "$script" >&2
+    exit 1
+fi
+
+# If we're already the service user, just run the script directly;
+# `sudo -iu portal` from inside a portal shell would needlessly re-auth.
+if [ "$(id -un)" = "$PORTAL_USER" ]; then
+    exec "$script" "$@"
+fi
+
+# Otherwise, drop into the service user's login shell and run the script.
+# `-i` ensures HOME, PATH, and group membership are set as `portal` would
+# see them at login (important — docker group may have just been added by
+# install.sh and the invoking operator's shell wouldn't have it).
+exec sudo -iu "$PORTAL_USER" -- "$script" "$@"

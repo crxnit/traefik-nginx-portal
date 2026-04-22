@@ -1,0 +1,24 @@
+[Unit]
+Description=Portal — nginx stack (static sites)
+Documentation=https://github.com/crxnit/traefik-nginx-portal
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+# Placeholders substituted at install time by install.sh:
+#   @PORTAL_DIR@ → operator's INSTALL_DIR (e.g. /srv/portal)
+#   @PORTAL_USER@ → service user (default 'portal')
+#   @DC_CMD@     → absolute docker / docker-compose path
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=@PORTAL_DIR@
+User=@PORTAL_USER@
+Group=@PORTAL_USER@
+ExecStart=@DC_CMD@ -f nginx/docker-compose.yml up -d
+ExecStop=@DC_CMD@ -f nginx/docker-compose.yml down
+# compose -d returns fast, but image pulls on first start can take a while.
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

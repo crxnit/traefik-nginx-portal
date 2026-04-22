@@ -27,6 +27,11 @@ BOOTSTRAP_SCRIPT="bin/bootstrap.sh"
 PROVISION_SCRIPT="bin/provision-site.sh"
 VERIFY_SCRIPT="bin/verify-networks.sh"
 LIST_SCRIPT="bin/list-sites.sh"
+PORTAL_WRAPPER="bin/portal"
+SYSTEMD_UNIT_DIR="/etc/systemd/system"
+SYSTEMD_UNIT_SRC="systemd"   # subpath inside the install dir
+SYSTEMD_UNITS="portal-nginx.service portal-traefik.service"
+WRAPPER_SYMLINK="/usr/local/bin/portal"
 MIN_DISK_KB=2097152      # 2 GB
 HEALTH_POLL_TIMEOUT=60
 HEALTH_POLL_INTERVAL=3
@@ -39,9 +44,12 @@ INITIAL_FQDN=""
 SPA_MODE="no"
 NGINX_CONTAINER="nginx"
 TRAEFIK_CONTAINER="traefik"
+PORTAL_USER="${PORTAL_USER:-portal}"   # service account that owns $INSTALL_DIR
 DC_CMD=""
+DC_CMD_ABS=""
 CLONE_STARTED=0
 INSTALL_LOG=""
+SYSTEMD_AVAILABLE=0
 
 # --- Colors ----------------------------------------------------------------
 
@@ -276,6 +284,24 @@ docker_compose_cmd() {
     fi
 }
 
+# Same as docker_compose_cmd but with the first token resolved to an
+# absolute path — systemd unit ExecStart fields require that.
+docker_compose_cmd_abs() {
+    local cmd first rest abs
+    cmd="$(docker_compose_cmd)"
+    [ -z "$cmd" ] && return 1
+    first="${cmd%% *}"
+    rest="${cmd#"$first"}"
+    abs="$(command -v "$first")" || return 1
+    printf '%s%s' "$abs" "$rest"
+}
+
+# Returns 0 if systemd is the running init and we can install units.
+have_systemd() {
+    command -v systemctl >/dev/null 2>&1 \
+        && [ -d /run/systemd/system ]
+}
+
 # Run a command inside ${INSTALL_DIR}. Used for every compose /
 # helper-script invocation in phases 4-5 so the cd+subshell pattern lives
 # in one place.
@@ -366,6 +392,17 @@ phase1_dependency_checks() {
     command -v git >/dev/null 2>&1     || missing="${missing} git"
     command -v openssl >/dev/null 2>&1 || missing="${missing} openssl"
 
+    # Service-user management — required on every install. If these binaries
+    # aren't present (unusual for a standard Linux distro), the portal user
+    # can't be created and the whole install-dir-ownership model breaks.
+    command -v useradd >/dev/null 2>&1 || missing="${missing} useradd"
+    command -v usermod >/dev/null 2>&1 || missing="${missing} usermod"
+    command -v getent  >/dev/null 2>&1 || missing="${missing} getent"
+
+    # sudo is required — install.sh runs as the operator but creates system-
+    # level resources (user, systemd units, /usr/local/bin symlink).
+    command -v sudo >/dev/null 2>&1 || missing="${missing} sudo"
+
     # We do NOT gate on "is the user root or in the docker group" — that's a
     # rootful-era proxy. Rootless Docker (Lima's current default, Podman-
     # compatible setups) doesn't use the docker group at all: the daemon
@@ -373,14 +410,27 @@ phase1_dependency_checks() {
     # the authoritative test for "can this user talk to a docker daemon."
 
     if [ -n "$missing" ]; then
-        # Strip leading space.
         missing="${missing# }"
         log_error "Missing or unusable: $missing"
         syslog_event "Dependency check failed: $missing"
         exit 1
     fi
 
+    # Systemd isn't *required* (falls back to docker-compose-up-managed mode),
+    # but it's expected on a production Linux host. Warn loudly if missing.
+    if have_systemd; then
+        SYSTEMD_AVAILABLE=1
+    else
+        SYSTEMD_AVAILABLE=0
+        log_warn "systemd not detected (no /run/systemd/system or no systemctl)."
+        log_warn "Install will skip the unit install — stacks won't auto-start on boot."
+    fi
+
+    # Absolute compose path is needed for systemd ExecStart lines.
+    DC_CMD_ABS="$(docker_compose_cmd_abs)" || DC_CMD_ABS="$DC_CMD"
+
     log_info "All dependencies satisfied. Compose command: $DC_CMD"
+    [ "$SYSTEMD_AVAILABLE" -eq 1 ] && log_info "systemd detected — will install portal-{nginx,traefik}.service units."
 }
 
 # --- Phase 2: interactive prompts ------------------------------------------
@@ -438,11 +488,17 @@ phase2_interactive_prompts() {
 phase3_confirmation() {
     log_step "Review configuration"
     printf '  %-25s %s\n' "Install directory:"    "$INSTALL_DIR"
+    printf '  %-25s %s\n' "Service user:"         "$PORTAL_USER (owns $INSTALL_DIR)"
     printf '  %-25s %s\n' "ACME email:"           "$ACME_EMAIL"
     printf '  %-25s %s\n' "Initial FQDN:"         "${INITIAL_FQDN:-<none>}"
     [ -n "$INITIAL_FQDN" ] && printf '  %-25s %s\n' "SPA mode:" "$SPA_MODE"
     printf '  %-25s %s\n' "nginx container:"      "$NGINX_CONTAINER"
     printf '  %-25s %s\n' "Traefik container:"    "$TRAEFIK_CONTAINER"
+    if [ "$SYSTEMD_AVAILABLE" -eq 1 ]; then
+        printf '  %-25s %s\n' "Lifecycle:"        "systemd (portal-nginx.service, portal-traefik.service)"
+    else
+        printf '  %-25s %s\n' "Lifecycle:"        "docker compose (no systemd — no auto-restart on boot)"
+    fi
     printf '  %-25s %s\n' "Install log:"          "${INSTALL_LOG:-<none>}"
     echo
 
@@ -472,6 +528,92 @@ phase4_wait_healthy() {
         elapsed=$((elapsed + HEALTH_POLL_INTERVAL))
     done
     log_warn "$container: did not become healthy within ${HEALTH_POLL_TIMEOUT}s (last: $status). Continuing."
+}
+
+# Create the portal service user (idempotent: no-op if it already exists).
+# Adds the user to the docker group if that group is present — rootful
+# Docker setups use /var/run/docker.sock owned by group `docker`. Rootless
+# setups don't have the group, so we skip with a warning and the operator
+# is responsible for making sure `portal` can talk to its docker daemon.
+phase4_ensure_service_user() {
+    log_step "Ensuring service user: $PORTAL_USER"
+    if getent passwd "$PORTAL_USER" >/dev/null; then
+        log_info "User '$PORTAL_USER' already exists — reusing."
+    else
+        syslog_event "Creating service user $PORTAL_USER"
+        sudo useradd \
+            --system \
+            --home-dir "$INSTALL_DIR" \
+            --shell /bin/bash \
+            --user-group \
+            "$PORTAL_USER" \
+            || { log_error "useradd $PORTAL_USER failed."; exit 1; }
+        log_info "Created system user '$PORTAL_USER' (home: $INSTALL_DIR, shell: /bin/bash, no password — login only via sudo)."
+    fi
+
+    if getent group docker >/dev/null; then
+        if id -nG "$PORTAL_USER" | tr ' ' '\n' | grep -qx 'docker'; then
+            log_info "'$PORTAL_USER' is already in the docker group."
+        else
+            sudo usermod -aG docker "$PORTAL_USER" \
+                || { log_error "usermod -aG docker $PORTAL_USER failed."; exit 1; }
+            log_info "Added '$PORTAL_USER' to the docker group."
+        fi
+    else
+        log_warn "'docker' group not found — probably rootless Docker."
+        log_warn "Service user '$PORTAL_USER' will not automatically have access to your Docker socket."
+        log_warn "Arrange that separately (rootless dockerd per user, DOCKER_HOST, etc.)."
+    fi
+}
+
+# chown $INSTALL_DIR to the service user. Everything under it — generated
+# configs, acme.json, default certs, per-site content — ends up owned by
+# `portal` going forward.
+phase4_chown_install_dir() {
+    log_step "Setting ownership: $PORTAL_USER:$PORTAL_USER -> $INSTALL_DIR"
+    sudo chown -R "$PORTAL_USER:$PORTAL_USER" "$INSTALL_DIR" \
+        || { log_error "chown failed."; exit 1; }
+}
+
+# Install the two systemd units (nginx + traefik) by substituting our
+# @PORTAL_DIR@ / @PORTAL_USER@ / @DC_CMD@ placeholders into the templates
+# shipped under systemd/ and dropping the result into /etc/systemd/system/.
+phase4_install_systemd_units() {
+    [ "$SYSTEMD_AVAILABLE" -eq 1 ] || {
+        log_warn "Skipping systemd units (systemd not detected)."
+        return 0
+    }
+    log_step "Installing systemd units"
+    local unit src dest tmp
+    for unit in $SYSTEMD_UNITS; do
+        src="${INSTALL_DIR}/${SYSTEMD_UNIT_SRC}/${unit}"
+        dest="${SYSTEMD_UNIT_DIR}/${unit}"
+        if [ ! -f "$src" ]; then
+            log_error "Unit template missing: $src"
+            exit 1
+        fi
+        tmp="$(mktemp)"
+        sed \
+            -e "s|@PORTAL_DIR@|${INSTALL_DIR}|g" \
+            -e "s|@PORTAL_USER@|${PORTAL_USER}|g" \
+            -e "s|@DC_CMD@|${DC_CMD_ABS}|g" \
+            "$src" > "$tmp"
+        sudo install -m 0644 -o root -g root "$tmp" "$dest" \
+            || { rm -f "$tmp"; log_error "install $dest failed."; exit 1; }
+        rm -f "$tmp"
+        log_info "Installed $dest"
+    done
+    sudo systemctl daemon-reload \
+        || { log_error "systemctl daemon-reload failed."; exit 1; }
+}
+
+# Run a script inside $INSTALL_DIR as the service user. Uses `sudo -iu`
+# so HOME, group membership (including the just-added docker group), and
+# working directory are all established as `portal` would have them at
+# login. The script path is absolute, so the service user's search PATH
+# doesn't matter.
+run_as_portal() {
+    sudo -iu "$PORTAL_USER" -- "$@"
 }
 
 phase4_install() {
@@ -508,19 +650,37 @@ phase4_install() {
     fi
     log_info "ACME email set to $ACME_EMAIL"
 
-    log_step "Running bootstrap.sh"
+    phase4_ensure_service_user
+    phase4_chown_install_dir
+    phase4_install_systemd_units
+
+    # Install-time wrapper symlink so operators type `portal` from anywhere.
+    if [ -f "${INSTALL_DIR}/${PORTAL_WRAPPER}" ]; then
+        log_step "Installing wrapper symlink: $WRAPPER_SYMLINK -> ${INSTALL_DIR}/${PORTAL_WRAPPER}"
+        sudo ln -sf "${INSTALL_DIR}/${PORTAL_WRAPPER}" "$WRAPPER_SYMLINK" \
+            || log_warn "Could not create $WRAPPER_SYMLINK — operators will need to invoke the wrapper by full path."
+    fi
+
+    log_step "Running bootstrap.sh as $PORTAL_USER"
     syslog_event "Running bootstrap"
-    run_in_portal bash "$BOOTSTRAP_SCRIPT"
+    run_as_portal "${INSTALL_DIR}/${BOOTSTRAP_SCRIPT}"
 
-    log_step "Starting nginx stack"
-    syslog_event "Starting nginx"
-    # shellcheck disable=SC2086  # $DC_CMD may be 'docker compose' (two words)
-    run_in_portal $DC_CMD -f nginx/docker-compose.yml up -d
-
-    log_step "Starting Traefik stack"
-    syslog_event "Starting Traefik"
-    # shellcheck disable=SC2086  # $DC_CMD may be 'docker compose' (two words)
-    run_in_portal $DC_CMD up -d
+    if [ "$SYSTEMD_AVAILABLE" -eq 1 ]; then
+        log_step "Enabling + starting systemd units"
+        syslog_event "Enabling systemd units"
+        # portal-traefik Requires= portal-nginx, so enabling/starting traefik
+        # alone would pull nginx in — but explicit is clearer in the logs.
+        sudo systemctl enable --now portal-nginx.service \
+            || { log_error "enable --now portal-nginx failed."; exit 1; }
+        sudo systemctl enable --now portal-traefik.service \
+            || { log_error "enable --now portal-traefik failed."; exit 1; }
+    else
+        # Fallback: no systemd, run compose directly as portal.
+        log_step "Starting stacks via docker compose (no systemd available)"
+        syslog_event "Starting stacks (no systemd)"
+        # shellcheck disable=SC2086  # $DC_CMD may be 'docker compose' (two words)
+        run_as_portal bash -c "cd '$INSTALL_DIR' && $DC_CMD -f nginx/docker-compose.yml up -d && $DC_CMD up -d"
+    fi
 
     log_step "Waiting for containers to be healthy"
     phase4_wait_healthy "$NGINX_CONTAINER"
@@ -532,7 +692,7 @@ phase4_install() {
         local spa_flag=""
         [ "$SPA_MODE" = "yes" ] && spa_flag="--spa"
         # shellcheck disable=SC2086  # spa_flag is empty or '--spa'; must not be quoted
-        run_in_portal bash "$PROVISION_SCRIPT" "$INITIAL_FQDN" $spa_flag
+        run_as_portal "${INSTALL_DIR}/${PROVISION_SCRIPT}" "$INITIAL_FQDN" $spa_flag
     fi
 }
 
@@ -542,14 +702,25 @@ phase5_verify() {
     log_step "Verifying install"
     local net_rc=0 curl_rc="n/a"
 
-    run_in_portal bash "$VERIFY_SCRIPT" || net_rc=$?
+    run_as_portal "${INSTALL_DIR}/${VERIFY_SCRIPT}" || net_rc=$?
     if [ "$net_rc" -eq 0 ]; then
         log_info "verify-networks.sh: PASS"
     else
         log_warn "verify-networks.sh: FAIL (rc=$net_rc)"
     fi
 
-    run_in_portal bash "$LIST_SCRIPT" || true
+    run_as_portal "${INSTALL_DIR}/${LIST_SCRIPT}" || true
+
+    if [ "$SYSTEMD_AVAILABLE" -eq 1 ]; then
+        local u
+        for u in portal-nginx.service portal-traefik.service; do
+            if systemctl is-active --quiet "$u"; then
+                log_info "systemd: $u active"
+            else
+                log_warn "systemd: $u not active (journalctl -u $u for details)"
+            fi
+        done
+    fi
 
     if [ -n "$INITIAL_FQDN" ]; then
         local http_code https_code
@@ -591,14 +762,21 @@ phase6_final_log() {
 
 ${GREEN}${BOLD}Install complete.${RESET}
 
+Portal service user: $PORTAL_USER (owns $INSTALL_DIR). Admins drop into
+that identity on demand via the 'portal' wrapper — no need to su or
+touch files in the install dir directly.
+
 Next steps:
-  - Provision more sites:   ${INSTALL_DIR}/bin/provision-site.sh <fqdn>
-  - Interactive menu:       ${INSTALL_DIR}/bin/menu.sh
-  - Verify at any time:     ${INSTALL_DIR}/bin/verify-networks.sh
+  - Interactive menu:       portal menu
+  - Provision more sites:   portal provision-site <fqdn>
+  - List/drift check:       portal list-sites
+  - Verify wiring:          portal verify-networks
+  - Systemd status:         systemctl status portal-nginx portal-traefik
   - Install log:            ${INSTALL_LOG:-<not captured>}
 
 Point DNS for your site(s) at this host and Let's Encrypt will issue certs
-on the first HTTPS request.
+on the first HTTPS request. Both stacks will restart automatically on
+reboot (enabled at the systemd level).
 EOF
 
     # Flush the tee subshell before main returns.
