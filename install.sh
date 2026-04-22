@@ -161,6 +161,49 @@ prompt_yes_no() {
     done
 }
 
+# Returns 0 if the install directory is writable by the current user
+# (either already exists-and-writable, or the nearest existing ancestor
+# is writable so mkdir/git-clone can create it). Emits a targeted error
+# with concrete remediation options otherwise. Called from phase 2 so
+# the user learns about perms up front — before git clone fails with
+# a bare "Permission denied" four phases later.
+check_install_dir_writable() {
+    local dir="$1"
+    # Reject any non-absolute path up front — later code assumes absolute.
+    case "$dir" in
+        /*) ;;
+        *) log_error "Install directory must be an absolute path: $dir"
+           return 1 ;;
+    esac
+
+    if [ -d "$dir" ]; then
+        if [ -w "$dir" ]; then
+            return 0
+        fi
+        log_error "Install directory exists but is not writable by $(id -un): $dir"
+        log_error "Fix with one of:"
+        log_error "  1. sudo chown $(id -un):$(id -gn) $dir"
+        log_error "  2. Choose a different directory (must be writable by $(id -un))"
+        return 1
+    fi
+
+    # Doesn't exist yet — we need write permission on the nearest
+    # existing ancestor to mkdir / git-clone into.
+    local parent="$dir"
+    while [ ! -e "$parent" ] && [ "$parent" != "/" ] && [ -n "$parent" ]; do
+        parent="$(dirname "$parent")"
+    done
+    [ -d "$parent" ] || parent="/"
+    if [ -w "$parent" ]; then
+        return 0
+    fi
+    log_error "Cannot create $dir — parent $parent is not writable by $(id -un)."
+    log_error "Fix with one of:"
+    log_error "  1. sudo mkdir -p $dir && sudo chown $(id -un):$(id -gn) $dir"
+    log_error "  2. Choose a different directory under a path you own (e.g. \$HOME/...)"
+    return 1
+}
+
 # df -k walks up until we find an existing ancestor. One df invocation
 # feeds both fields; we verify the size is numeric before comparing, so
 # a df output change doesn't silently skip the warning.
@@ -316,7 +359,13 @@ phase2_interactive_prompts() {
         fi
     fi
 
-    prompt_with_default INSTALL_DIR "Install directory" "$INSTALL_DIR"
+    while :; do
+        prompt_with_default INSTALL_DIR "Install directory" "$INSTALL_DIR"
+        if check_install_dir_writable "$INSTALL_DIR"; then
+            break
+        fi
+        echo
+    done
     check_disk_space "$INSTALL_DIR"
 
     while :; do
