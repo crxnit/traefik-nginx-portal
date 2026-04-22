@@ -332,12 +332,21 @@ handle_exit() {
     local code=$?
     # Only warn if phase 4 started AND actually created the install dir.
     # If `git clone` failed before creating the target (e.g., no write
-    # permission on the parent), there's nothing to inspect and the old
-    # message was misleading.
+    # permission on the parent), there's nothing to inspect.
     if [ "$code" -ne 0 ] && [ "$CLONE_STARTED" -eq 1 ] && [ -d "$INSTALL_DIR" ]; then
         log_warn "Installer exited with a partial install directory: $INSTALL_DIR"
-        log_warn "Not auto-deleting. Inspect it, then remove manually if undesired:"
+        log_warn "Not auto-deleting. Inspect it, then if you want to start clean:"
+        log_warn "  # stop + remove any started containers"
+        log_warn "  sudo systemctl disable --now portal-nginx portal-traefik 2>/dev/null || true"
+        log_warn "  # remove systemd units, wrapper symlink, service user, install dir"
+        log_warn "  sudo rm -f /etc/systemd/system/portal-nginx.service /etc/systemd/system/portal-traefik.service"
+        log_warn "  sudo systemctl daemon-reload"
+        log_warn "  sudo rm -f $WRAPPER_SYMLINK"
+        log_warn "  sudo userdel --remove $PORTAL_USER 2>/dev/null || true"
         log_warn "  sudo rm -rf \"$INSTALL_DIR\""
+        log_warn "  # Docker networks (shared with any other portal instance — review before removing):"
+        log_warn "  # docker network rm traefik edge"
+        log_warn "Each step is a no-op if the corresponding resource wasn't created, so running them all is safe."
     fi
 }
 

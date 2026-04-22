@@ -24,7 +24,13 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The wrapper is installed as a symlink at /usr/local/bin/portal pointing
+# into $INSTALL_DIR/bin/portal. Without resolving the symlink first,
+# `dirname ${BASH_SOURCE[0]}` would return /usr/local/bin and PORTAL_DIR
+# would resolve to /usr/local — breaking every subcommand lookup.
+# readlink -f is GNU-standard and available on all supported Linux distros.
+_real_source="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "$_real_source")" && pwd)"
 PORTAL_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PORTAL_USER="${PORTAL_USER:-portal}"
 
