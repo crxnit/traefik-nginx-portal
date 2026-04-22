@@ -277,12 +277,11 @@ phase1_dependency_checks() {
     command -v git >/dev/null 2>&1     || missing="${missing} git"
     command -v openssl >/dev/null 2>&1 || missing="${missing} openssl"
 
-    # Either root, or member of the `docker` group.
-    if [ "$(id -u)" -ne 0 ]; then
-        if ! id -nG | tr ' ' '\n' | grep -qx 'docker'; then
-            missing="${missing} root-or-docker-group"
-        fi
-    fi
+    # We do NOT gate on "is the user root or in the docker group" — that's a
+    # rootful-era proxy. Rootless Docker (Lima's current default, Podman-
+    # compatible setups) doesn't use the docker group at all: the daemon
+    # runs as the user and owns the socket. The `docker info` call above is
+    # the authoritative test for "can this user talk to a docker daemon."
 
     if [ -n "$missing" ]; then
         # Strip leading space.
