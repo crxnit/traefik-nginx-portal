@@ -3,7 +3,7 @@
 # install.sh — One-shot server installer for the Traefik + nginx portal.
 #
 # Intended flow:
-#   curl -sSL https://raw.githubusercontent.com/crxnit/traefik-nginx-provisioning-scripts/main/install.sh | bash
+#   curl -sSL https://raw.githubusercontent.com/crxnit/traefik-nginx-portal/main/install.sh | bash
 #
 # Phases:
 #   0. Guard against existing portal installations
@@ -20,7 +20,7 @@ set -euo pipefail
 
 # --- Constants -------------------------------------------------------------
 
-REPO_URL="https://github.com/crxnit/traefik-nginx-provisioning-scripts.git"
+REPO_URL="https://github.com/crxnit/traefik-nginx-portal.git"
 ACME_EMAIL_PLACEHOLDER="letsencrypt@example.com"
 TRAEFIK_YML_SUBPATH="traefik/traefik.yml"
 BOOTSTRAP_SCRIPT="bin/bootstrap.sh"

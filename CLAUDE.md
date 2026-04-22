@@ -127,9 +127,9 @@ No build, no tests, no linter — this is purely shell + config.
 
 ```bash
 # On a fresh production server:
-curl -fsSL https://raw.githubusercontent.com/crxnit/traefik-nginx-provisioning-scripts/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/crxnit/traefik-nginx-portal/main/install.sh | bash
 # or download first:
-curl -fsSL https://raw.githubusercontent.com/crxnit/traefik-nginx-provisioning-scripts/main/install.sh -o install.sh && bash install.sh
+curl -fsSL https://raw.githubusercontent.com/crxnit/traefik-nginx-portal/main/install.sh -o install.sh && bash install.sh
 ```
 
 Structure: 7 phases (existing-config guard, dependency checks, prompts, confirm, install, verify, cleanup + final log). Writes a full session log to `/var/log/portal-install-TIMESTAMP.log` (falls back to `$HOME/` if unwritable) and emits syslog entries via `logger -t portal-install` at each phase. Exits 0 without changes if an existing installation is detected (running `nginx`/`traefik` container, `traefik`/`edge` network, or populated `$INSTALL_DIR/srv/portal/`). When curl-piped, reopens stdin from `/dev/tty` so prompts still work.
