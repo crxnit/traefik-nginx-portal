@@ -7,11 +7,20 @@
 #
 # Phases:
 #   0. Guard against existing portal installations
-#   1. Dependency checks (Linux, docker, compose, git, openssl, permissions)
+#   1. Dependency checks (Linux, docker, compose, git, openssl, sudo, useradd, ...)
 #   2. Interactive prompts (install dir, ACME email, optional first FQDN, ...)
 #   3. Summary + confirmation
-#   4. Install (clone, patch ACME email, bootstrap, bring up stacks, optional first site)
-#   5. Verify (verify-networks.sh, list-sites.sh, HTTP/HTTPS probes)
+#   4. Install:
+#        - clone repo
+#        - patch ACME email in traefik.yml
+#        - create portal service user + add to docker group
+#        - chown $INSTALL_DIR to service user
+#        - install systemd unit templates to /etc/systemd/system/
+#        - install /usr/local/bin/portal wrapper symlink
+#        - run bootstrap.sh as service user
+#        - systemctl enable --now both stacks (or fallback: compose up -d)
+#        - optional first-site provision
+#   5. Verify (verify-networks.sh, list-sites.sh, systemctl is-active, HTTP/HTTPS probes)
 #   6. Final log + success banner
 #
 # Bash 3.2 compatible. shellcheck --severity=warning clean.
@@ -302,13 +311,6 @@ have_systemd() {
         && [ -d /run/systemd/system ]
 }
 
-# Run a command inside ${INSTALL_DIR}. Used for every compose /
-# helper-script invocation in phases 4-5 so the cd+subshell pattern lives
-# in one place.
-run_in_portal() {
-    ( cd "${INSTALL_DIR}" && "$@" )
-}
-
 # Probe a URL and return just its HTTP status code (or 000 on failure).
 # Second arg is an optional extra curl flag (e.g. -k for the HTTPS probe
 # while Traefik is still serving the self-signed default cert).
@@ -560,18 +562,28 @@ phase4_ensure_service_user() {
         log_info "Created system user '$PORTAL_USER' (home: $INSTALL_DIR, shell: /bin/bash, no password — login only via sudo)."
     fi
 
-    if getent group docker >/dev/null; then
-        if id -nG "$PORTAL_USER" | tr ' ' '\n' | grep -qx 'docker'; then
-            log_info "'$PORTAL_USER' is already in the docker group."
-        else
-            sudo usermod -aG docker "$PORTAL_USER" \
-                || { log_error "usermod -aG docker $PORTAL_USER failed."; exit 1; }
-            log_info "Added '$PORTAL_USER' to the docker group."
-        fi
+    if ! getent group docker >/dev/null; then
+        # Rootless Docker (and Podman's docker-compat) don't use the docker
+        # group: the daemon runs as the operator and owns a user-local socket
+        # under /run/user/UID/. The service-user model can't work here —
+        # when systemctl tries to bring up the portal stacks as `portal`,
+        # compose would fail to reach the operator's rootless daemon.
+        log_error "'docker' group not found — this looks like a rootless Docker setup."
+        log_error "The service-user + systemd model requires a rootful Docker install"
+        log_error "where the 'docker' group exists and the daemon socket is group-accessible."
+        log_error "Either switch to rootful Docker (apt install docker-ce + systemctl enable docker),"
+        log_error "or skip this installer and run the portal directly as your operator user"
+        log_error "against your rootless daemon (docker compose up -d manually from \$INSTALL_DIR)."
+        syslog_event "Aborted: rootless Docker (no docker group) not supported by service-user model."
+        exit 1
+    fi
+
+    if id -nG "$PORTAL_USER" | tr ' ' '\n' | grep -qx 'docker'; then
+        log_info "'$PORTAL_USER' is already in the docker group."
     else
-        log_warn "'docker' group not found — probably rootless Docker."
-        log_warn "Service user '$PORTAL_USER' will not automatically have access to your Docker socket."
-        log_warn "Arrange that separately (rootless dockerd per user, DOCKER_HOST, etc.)."
+        sudo usermod -aG docker "$PORTAL_USER" \
+            || { log_error "usermod -aG docker $PORTAL_USER failed."; exit 1; }
+        log_info "Added '$PORTAL_USER' to the docker group."
     fi
 }
 

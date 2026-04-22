@@ -43,7 +43,15 @@ cmd="${cmd%.sh}"
 script="${PORTAL_DIR}/bin/${cmd}.sh"
 if [ ! -f "$script" ]; then
     printf 'portal: no such command: %s\n' "$cmd" >&2
-    printf 'Known commands: look under %s/bin/*.sh\n' "$PORTAL_DIR" >&2
+    printf 'Known commands:\n' >&2
+    for f in "$PORTAL_DIR"/bin/*.sh; do
+        # Skip non-executables (e.g., _lib.sh is sourced, not run) and
+        # underscore-prefixed files (shared helpers, not operator entry points).
+        [ -x "$f" ] || continue
+        name="$(basename "$f" .sh)"
+        case "$name" in _*) continue ;; esac
+        printf '  portal %s\n' "$name" >&2
+    done
     exit 1
 fi
 if [ ! -x "$script" ]; then
