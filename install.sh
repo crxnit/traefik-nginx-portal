@@ -126,34 +126,37 @@ validate_fqdn_inline() {
 
 # prompt_with_default VAR_NAME "prompt text" "default"
 # Uses `printf -v` (bash 3.1+) so we avoid eval and the quoting hazards
-# that come with it; var_name is operator-controlled, not user input.
+# that come with it. The internal buffer is named with an unlikely prefix
+# so a caller passing a var named "answer"/"input"/etc. doesn't get
+# shadowed by our local — printf -v binds to the nearest-enclosing scope.
 prompt_with_default() {
     local var_name="$1"
     local prompt_text="$2"
     local default_value="$3"
-    local answer
+    local _pwd_buf
     if [ -n "$default_value" ]; then
         printf '%s [%s]: ' "$prompt_text" "$default_value"
     else
         printf '%s: ' "$prompt_text"
     fi
-    IFS= read -r answer || answer=""
-    [ -z "$answer" ] && answer="$default_value"
-    printf -v "$var_name" '%s' "$answer"
+    IFS= read -r _pwd_buf || _pwd_buf=""
+    [ -z "$_pwd_buf" ] && _pwd_buf="$default_value"
+    printf -v "$var_name" '%s' "$_pwd_buf"
 }
 
 # prompt_yes_no VAR_NAME "prompt text" "yes|no"
+# See comment on prompt_with_default for the `_pyn_buf` name choice.
 prompt_yes_no() {
     local var_name="$1"
     local prompt_text="$2"
     local default_value="$3"
-    local answer
+    local _pyn_buf
     while :; do
         printf '%s [%s]: ' "$prompt_text" "$default_value"
-        IFS= read -r answer || answer=""
-        [ -z "$answer" ] && answer="$default_value"
-        answer="$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')"
-        case "$answer" in
+        IFS= read -r _pyn_buf || _pyn_buf=""
+        [ -z "$_pyn_buf" ] && _pyn_buf="$default_value"
+        _pyn_buf="$(printf '%s' "$_pyn_buf" | tr '[:upper:]' '[:lower:]')"
+        case "$_pyn_buf" in
             y|yes) printf -v "$var_name" 'yes'; return 0 ;;
             n|no)  printf -v "$var_name" 'no';  return 0 ;;
             *)     printf '  Please answer yes or no.\n' ;;
