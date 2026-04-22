@@ -74,15 +74,22 @@ log_file_only() {
 }
 
 # Pick a writable log path. Prefer /var/log so multi-user hosts can audit.
+# Log contains the operator's ACME email + any provisioned FQDN, so it's
+# chmod'd 600 at creation time to avoid leaking PII to other local users.
 setup_log() {
     local ts
     ts="$(date +%Y%m%d-%H%M%S)"
     local candidate="/var/log/portal-install-${ts}.log"
     if touch "$candidate" 2>/dev/null; then
+        chmod 600 "$candidate" 2>/dev/null || true
         INSTALL_LOG="$candidate"
     else
         INSTALL_LOG="${HOME:-/tmp}/portal-install-${ts}.log"
-        touch "$INSTALL_LOG" 2>/dev/null || INSTALL_LOG=""
+        if touch "$INSTALL_LOG" 2>/dev/null; then
+            chmod 600 "$INSTALL_LOG" 2>/dev/null || true
+        else
+            INSTALL_LOG=""
+        fi
     fi
     [ -n "$INSTALL_LOG" ] && log_info "Install log: $INSTALL_LOG"
 }
@@ -345,9 +352,11 @@ phase4_wait_healthy() {
 }
 
 phase4_install() {
-    # Capture stdout + stderr for the rest of the run.
+    # Capture stdout + stderr for the rest of the run. ANSI SGR escapes are
+    # stripped on the file-bound branch so the log stays readable weeks later;
+    # the terminal branch keeps them. $'\033' is the literal ESC byte.
     if [ -n "$INSTALL_LOG" ]; then
-        exec 1> >(tee -a "$INSTALL_LOG")
+        exec 1> >(tee >(sed $'s/\033\\[[0-9;]*m//g' >> "$INSTALL_LOG"))
         exec 2>&1
     fi
 
