@@ -12,8 +12,7 @@
 #   3. Summary + confirmation
 #   4. Install (clone, patch ACME email, bootstrap, bring up stacks, optional first site)
 #   5. Verify (verify-networks.sh, list-sites.sh, HTTP/HTTPS probes)
-#   6. Cleanup (no temp files in this script, but stub is retained for logging)
-#   7. Final log + success banner
+#   6. Final log + success banner
 #
 # Bash 3.2 compatible. shellcheck --severity=warning clean.
 
@@ -72,6 +71,10 @@ log_file_only() {
     [ -n "$INSTALL_LOG" ] || return 0
     printf '%s\n' "$*" >> "$INSTALL_LOG"
 }
+
+# Emit a syslog entry tagged portal-install. No-op if logger is unavailable
+# or writing to syslog fails (e.g., unprivileged container without /dev/log).
+syslog_event() { logger -t portal-install "$*" 2>/dev/null || true; }
 
 # Pick a writable log path. Prefer /var/log so multi-user hosts can audit.
 # Log contains the operator's ACME email + any provisioned FQDN, so it's
@@ -179,11 +182,18 @@ docker_compose_cmd() {
     fi
 }
 
+# Run a command inside ${INSTALL_DIR}/srv/portal. Used for every compose /
+# helper-script invocation in phases 4-5 so the cd+subshell pattern lives
+# in one place.
+run_in_portal() {
+    ( cd "${INSTALL_DIR}/srv/portal" && "$@" )
+}
+
 # --- Trap handlers ---------------------------------------------------------
 
 handle_sigint() {
     log_warn "Interrupted. Exiting."
-    logger -t portal-install "Interrupted by user." 2>/dev/null || true
+    syslog_event "Interrupted by user."
     exit 130
 }
 
@@ -194,7 +204,6 @@ handle_exit() {
         log_warn "Not auto-deleting. Inspect the directory, then remove manually if undesired:"
         log_warn "  sudo rm -rf \"$INSTALL_DIR\""
     fi
-    return "$code"
 }
 
 # --- Phase 0: existing-config guard ----------------------------------------
@@ -219,7 +228,7 @@ phase0_existing_config_guard() {
         log_warn "Existing portal installation detected: $found"
         log_warn "Aborting to avoid clobbering existing state."
         log_file_only "[phase 0] aborted: $found"
-        logger -t portal-install "Existing installation detected ($found) — aborting." 2>/dev/null || true
+        syslog_event "Existing installation detected ($found) — aborting."
         exit 0
     fi
 }
@@ -232,7 +241,7 @@ phase1_dependency_checks() {
     uname_s="$(uname -s)"
     if [ "$uname_s" != "Linux" ]; then
         log_error "This installer targets Linux servers. Detected: $uname_s"
-        logger -t portal-install "Non-Linux host: $uname_s" 2>/dev/null || true
+        syslog_event "Non-Linux host: $uname_s"
         exit 1
     fi
 
@@ -259,7 +268,7 @@ phase1_dependency_checks() {
         # Strip leading space.
         missing="${missing# }"
         log_error "Missing or unusable: $missing"
-        logger -t portal-install "Dependency check failed: $missing" 2>/dev/null || true
+        syslog_event "Dependency check failed: $missing"
         exit 1
     fi
 
@@ -328,7 +337,7 @@ phase3_confirmation() {
     IFS= read -r answer || answer=""
     if [ "$answer" != "yes" ]; then
         log_info "Aborted by user."
-        logger -t portal-install "Aborted by user at confirmation." 2>/dev/null || true
+        syslog_event "Aborted by user at confirmation."
         exit 0
     fi
 }
@@ -361,7 +370,7 @@ phase4_install() {
     fi
 
     log_step "Cloning repository"
-    logger -t portal-install "Cloning $REPO_URL -> $INSTALL_DIR" 2>/dev/null || true
+    syslog_event "Cloning $REPO_URL -> $INSTALL_DIR"
     CLONE_STARTED=1
     git clone "$REPO_URL" "$INSTALL_DIR"
 
@@ -376,16 +385,18 @@ phase4_install() {
     log_info "ACME email set to $ACME_EMAIL"
 
     log_step "Running bootstrap.sh"
-    logger -t portal-install "Running bootstrap" 2>/dev/null || true
-    ( cd "${INSTALL_DIR}/srv/portal" && bash "$BOOTSTRAP_SCRIPT" )
+    syslog_event "Running bootstrap"
+    run_in_portal bash "$BOOTSTRAP_SCRIPT"
 
     log_step "Starting nginx stack"
-    logger -t portal-install "Starting nginx" 2>/dev/null || true
-    ( cd "${INSTALL_DIR}/srv/portal" && $DC_CMD -f nginx/docker-compose.yml up -d )
+    syslog_event "Starting nginx"
+    # shellcheck disable=SC2086  # $DC_CMD may be 'docker compose' (two words)
+    run_in_portal $DC_CMD -f nginx/docker-compose.yml up -d
 
     log_step "Starting Traefik stack"
-    logger -t portal-install "Starting Traefik" 2>/dev/null || true
-    ( cd "${INSTALL_DIR}/srv/portal" && $DC_CMD up -d )
+    syslog_event "Starting Traefik"
+    # shellcheck disable=SC2086  # $DC_CMD may be 'docker compose' (two words)
+    run_in_portal $DC_CMD up -d
 
     log_step "Waiting for containers to be healthy"
     phase4_wait_healthy "$NGINX_CONTAINER"
@@ -393,11 +404,11 @@ phase4_install() {
 
     if [ -n "$INITIAL_FQDN" ]; then
         log_step "Provisioning initial site: $INITIAL_FQDN"
-        logger -t portal-install "Provisioning $INITIAL_FQDN" 2>/dev/null || true
+        syslog_event "Provisioning $INITIAL_FQDN"
         local spa_flag=""
         [ "$SPA_MODE" = "yes" ] && spa_flag="--spa"
         # shellcheck disable=SC2086  # spa_flag is empty or '--spa'; must not be quoted
-        ( cd "${INSTALL_DIR}/srv/portal" && bash "$PROVISION_SCRIPT" "$INITIAL_FQDN" $spa_flag )
+        run_in_portal bash "$PROVISION_SCRIPT" "$INITIAL_FQDN" $spa_flag
     fi
 }
 
@@ -407,14 +418,14 @@ phase5_verify() {
     log_step "Verifying install"
     local net_rc=0 curl_rc="n/a"
 
-    ( cd "${INSTALL_DIR}/srv/portal" && bash "$VERIFY_SCRIPT" ) || net_rc=$?
+    run_in_portal bash "$VERIFY_SCRIPT" || net_rc=$?
     if [ "$net_rc" -eq 0 ]; then
         log_info "verify-networks.sh: PASS"
     else
         log_warn "verify-networks.sh: FAIL (rc=$net_rc)"
     fi
 
-    ( cd "${INSTALL_DIR}/srv/portal" && bash "$LIST_SCRIPT" ) || true
+    run_in_portal bash "$LIST_SCRIPT" || true
 
     if [ -n "$INITIAL_FQDN" ]; then
         local http_code https_code
@@ -433,20 +444,12 @@ phase5_verify() {
         esac
     fi
 
-    logger -t portal-install "Verification: net=$([ "$net_rc" -eq 0 ] && echo PASS || echo FAIL) curl=$curl_rc" 2>/dev/null || true
+    syslog_event "Verification: net=$([ "$net_rc" -eq 0 ] && echo PASS || echo FAIL) curl=$curl_rc"
 }
 
-# --- Phase 6: cleanup ------------------------------------------------------
+# --- Phase 6: final log + banner -------------------------------------------
 
-phase6_cleanup() {
-    log_step "Cleanup"
-    log_info "No temp files created by installer; nothing to remove."
-    logger -t portal-install "Cleanup complete." 2>/dev/null || true
-}
-
-# --- Phase 7: final log + banner -------------------------------------------
-
-phase7_final_log() {
+phase6_final_log() {
     log_step "Done"
     if [ -n "$INSTALL_LOG" ]; then
         {
@@ -492,8 +495,7 @@ main() {
     phase3_confirmation
     phase4_install
     phase5_verify
-    phase6_cleanup
-    phase7_final_log
+    phase6_final_log
 }
 
 main "$@"
