@@ -1,0 +1,51 @@
+version: 2
+updates:
+  # Watch GitHub Actions versions in .github/workflows/*.yml.
+  # Opens PRs when actions/checkout, ludeeus/action-shellcheck, etc.
+  # publish new releases.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "ci"
+      - "dependencies"
+    commit-message:
+      prefix: "ci"
+
+  # Watch Docker image pins in the Traefik compose file
+  # (traefik:v3.3.4). PRs bump the minor/patch versions per
+  # allow rules.
+  - package-ecosystem: "docker"
+    directory: "/srv/portal/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "infra"
+      - "dependencies"
+    commit-message:
+      prefix: "infra"
+    # Allow minor + patch bumps for Traefik; major changes
+    # ship with breaking config changes and deserve a manual
+    # review cycle rather than an auto-PR.
+    ignore:
+      - dependency-name: "traefik"
+        update-types: ["version-update:semver-major"]
+
+  # Watch Docker image pins in the nginx compose file
+  # (nginx:1.27-alpine). Same policy: minor/patch only.
+  - package-ecosystem: "docker"
+    directory: "/srv/portal/nginx/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "infra"
+      - "dependencies"
+    commit-message:
+      prefix: "infra"
+    ignore:
+      - dependency-name: "nginx"
+        update-types: ["version-update:semver-major"]
