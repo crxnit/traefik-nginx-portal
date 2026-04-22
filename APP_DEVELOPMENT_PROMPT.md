@@ -274,7 +274,7 @@ Both patterns get Let's Encrypt certs automatically on first HTTPS request. That
 When the operator asks "how do I add your app?", the answer should be one of these two templates:
 
 **Pattern A:**
-> "It's static. Run `./bin/provision-site.sh myapp.example.com` (or add `--spa` if it's an SPA), then rsync the contents of my `dist/` directory into `srv/portal/nginx/sites/myapp.example.com/`. DNS is already pointed."
+> "It's static. Run `./bin/provision-site.sh myapp.example.com` (or add `--spa` if it's an SPA), then rsync the contents of my `dist/` directory into `nginx/sites/myapp.example.com/`. DNS is already pointed."
 
 **Pattern B:**
 > "It's a container. Here's the image reference and two yaml files — the `docker-compose.yml` for the app and the `traefik/dynamic/myapp.example.com.yml` for the router. Drop them both into place, `docker compose -f myapp/docker-compose.yml up -d`, and verify with `./bin/list-sites.sh --probe`. DNS is already pointed."

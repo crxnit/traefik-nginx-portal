@@ -18,7 +18,7 @@ updates:
   # (traefik:v3.3.4). PRs bump the minor/patch versions per
   # allow rules.
   - package-ecosystem: "docker"
-    directory: "/srv/portal/"
+    directory: "/"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -37,7 +37,7 @@ updates:
   # Watch Docker image pins in the nginx compose file
   # (nginx:1.27-alpine). Same policy: minor/patch only.
   - package-ecosystem: "docker"
-    directory: "/srv/portal/nginx/"
+    directory: "/nginx/"
     schedule:
       interval: "weekly"
       day: "monday"

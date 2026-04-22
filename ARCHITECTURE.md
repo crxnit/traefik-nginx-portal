@@ -27,7 +27,7 @@ The design goal is: **adding or removing a site should be one command, always sa
                                      │ :80 / :443
                                      ▼
   ┌──────────────────────────────────────────────────────────────────┐
-  │                   Docker host (srv/portal/)                      │
+  │                   Docker host ()                      │
   │                                                                  │
   │   ┌────────────────────────────────┐                             │
   │   │  traefik container             │                             │
@@ -71,7 +71,7 @@ A typical HTTPS request to `example.com` traverses the stack like this:
       (or falls back to the default self-signed cert from _default-tls.yml)
 
 2.  Traefik consults its dynamic file provider
-    - File watcher reads srv/portal/traefik/dynamic/*.yml
+    - File watcher reads traefik/dynamic/*.yml
     - Finds the router whose rule is Host(`example.com`)
     - Router references service = nginx-backend (defined in _shared-services.yml)
     - Router references middlewares = security-headers@file, rate-limit@file
@@ -103,9 +103,9 @@ A site called `example.com` is represented by **exactly three files/directories*
 
 | Path                                              | Purpose                                         |
 |---------------------------------------------------|-------------------------------------------------|
-| `srv/portal/nginx/conf.d/example.com.conf`        | nginx `server { server_name example.com; ... }` block — routing inside the nginx container |
-| `srv/portal/nginx/sites/example.com/`             | Content directory, mounted at `/var/www/example.com/` inside the nginx container |
-| `srv/portal/traefik/dynamic/example.com.yml`      | Traefik router + TLS directive — routing at the edge |
+| `nginx/conf.d/example.com.conf`        | nginx `server { server_name example.com; ... }` block — routing inside the nginx container |
+| `nginx/sites/example.com/`             | Content directory, mounted at `/var/www/example.com/` inside the nginx container |
+| `traefik/dynamic/example.com.yml`      | Traefik router + TLS directive — routing at the edge |
 
 **All three must exist.** If any one is missing, the site is "drifted":
 - No nginx conf → Traefik routes to nginx, nginx has no server block, returns the default catchall's 404
@@ -121,47 +121,46 @@ A site called `example.com` is represented by **exactly three files/directories*
 ## 5. File layout
 
 ```
-.
+.                                       # Repo root IS `$PORTAL_DIR` (e.g., /srv/portal/ on the host)
 ├── .gitignore                          # Excludes generated per-site files, secrets, binaries
 ├── ARCHITECTURE.md                     # This document
 ├── CLAUDE.md                           # Concise AI-focused context
 ├── IDEMPOTENCY_AUDIT.md                # Audit history + rationale for design decisions
-└── srv/
-    └── portal/                         # Conventionally `$PORTAL_DIR` on the host (e.g., /srv/portal/)
-        ├── docker-compose.yml          # Traefik stack
-        ├── bin/                        # All operator-facing scripts + shared library
-        │   ├── _lib.sh                 # Shared helpers sourced by every other script
-        │   ├── bootstrap.sh            # One-shot host setup (networks, acme.json, default TLS)
-        │   ├── create-docker-networks.sh # Network bootstrap (delegated from bootstrap.sh)
-        │   ├── ensure-default-tls.sh   # Self-signed default cert for unknown-SNI requests
-        │   ├── verify-networks.sh      # Post-deploy container/network wiring check
-        │   ├── provision-site.sh       # Add a site (three-artifact write + reload)
-        │   ├── deprovision-site.sh     # Remove a site (three-artifact delete + reload)
-        │   ├── list-sites.sh           # Drift detector + optional reachability probe
-        │   ├── menu.sh                 # Interactive menu entry point + audit log
-        │   └── reload-nginx.sh         # Test + graceful reload (wrapper around _lib.sh)
-        ├── traefik/
-        │   ├── traefik.yml             # Static Traefik config (TLS options, entrypoints, ACME)
-        │   ├── acme.json               # ACME state — NOT committed; created by bootstrap.sh
-        │   ├── certs/                  # NOT committed; default self-signed cert + key
-        │   │   ├── default.crt
-        │   │   └── default.key
-        │   └── dynamic/                # Traefik file-provider config
-        │       ├── _default-tls.yml    # tls.stores.default (self-signed)
-        │       ├── _middlewares.yml    # security-headers, rate-limit
-        │       ├── _shared-services.yml # nginx-backend (referenced by every site router)
-        │       └── <fqdn>.yml          # Per-site router — NOT committed (gitignored)
-        └── nginx/
-            ├── docker-compose.yml      # nginx stack
-            ├── nginx.conf              # Global nginx config
-            ├── conf.d/
-            │   ├── 00-default.conf     # Catchall server_name _ (default_server)
-            │   └── <fqdn>.conf         # Per-site server block — NOT committed
-            └── sites/
-                ├── default/            # Content for 00-default.conf
-                │   └── index.html
-                └── <fqdn>/             # Per-site content — NOT committed
-                    └── index.html
+├── install.sh                          # One-shot server installer (curl | bash)
+├── docker-compose.yml                  # Traefik stack
+├── bin/                                # All operator-facing scripts + shared library
+│   ├── _lib.sh                         # Shared helpers sourced by every other script
+│   ├── bootstrap.sh                    # One-shot host setup (networks, acme.json, default TLS)
+│   ├── create-docker-networks.sh       # Network bootstrap (delegated from bootstrap.sh)
+│   ├── ensure-default-tls.sh           # Self-signed default cert for unknown-SNI requests
+│   ├── verify-networks.sh              # Post-deploy container/network wiring check
+│   ├── provision-site.sh               # Add a site (three-artifact write + reload)
+│   ├── deprovision-site.sh             # Remove a site (three-artifact delete + reload)
+│   ├── list-sites.sh                   # Drift detector + optional reachability probe
+│   ├── menu.sh                         # Interactive menu entry point + audit log
+│   └── reload-nginx.sh                 # Test + graceful reload (wrapper around _lib.sh)
+├── traefik/
+│   ├── traefik.yml                     # Static Traefik config (TLS options, entrypoints, ACME)
+│   ├── acme.json                       # ACME state — NOT committed; created by bootstrap.sh
+│   ├── certs/                          # NOT committed; default self-signed cert + key
+│   │   ├── default.crt
+│   │   └── default.key
+│   └── dynamic/                        # Traefik file-provider config
+│       ├── _default-tls.yml            # tls.stores.default (self-signed)
+│       ├── _middlewares.yml            # security-headers, rate-limit
+│       ├── _shared-services.yml        # nginx-backend (referenced by every site router)
+│       └── <fqdn>.yml                  # Per-site router — NOT committed (gitignored)
+└── nginx/
+    ├── docker-compose.yml              # nginx stack
+    ├── nginx.conf                      # Global nginx config
+    ├── conf.d/
+    │   ├── 00-default.conf             # Catchall server_name _ (default_server)
+    │   └── <fqdn>.conf                 # Per-site server block — NOT committed
+    └── sites/
+        ├── default/                    # Content for 00-default.conf
+        │   └── index.html
+        └── <fqdn>/                     # Per-site content — NOT committed
+            └── index.html
 ```
 
 The underscore-prefix convention on Traefik shared files (`_*.yml`) is what `list-sites.sh` uses to distinguish them from per-site router files.
@@ -170,7 +169,7 @@ The underscore-prefix convention on Traefik shared files (`_*.yml`) is what `lis
 
 ## 6. Scripts
 
-All scripts use `set -euo pipefail` and source `srv/portal/bin/_lib.sh`. They're organized into three groups by purpose:
+All scripts use `set -euo pipefail` and source `bin/_lib.sh`. They're organized into three groups by purpose:
 
 ### 6.1. Host bootstrap (run once per server)
 
@@ -218,7 +217,7 @@ Read-only; always safe to run.
 
 **`menu.sh`** — interactive menu that wraps every other script in the toolkit. Organizes actions into host-setup, stack-lifecycle, sites, and logs categories. Requires a TTY (reads go through `/dev/tty` so piped stdin can't bypass confirmation prompts). For non-interactive use, invoke the underlying scripts directly or run `./bin/menu.sh --cheatsheet` to print the CLI equivalents.
 
-Every menu session writes to an audit log at `srv/portal/logs/menu.log` (gitignored, mode 600). One event per line, UTC timestamp, key=value format:
+Every menu session writes to an audit log at `logs/menu.log` (gitignored, mode 600). One event per line, UTC timestamp, key=value format:
 
 ```
 2026-04-20T16:20:20Z session_start user=john host=prod-1 pid=38341 tty=/dev/pts/0
@@ -356,31 +355,31 @@ Neither is digest-pinned. If full reproducibility is needed, append `@sha256:...
 
 ```bash
 # Clone target is arbitrary — the scripts self-locate via $BASH_SOURCE.
-# Common choices: /srv/portal-src, /opt/portal, ~/portal. Pick what fits
-# your host layout; the examples below use /srv/portal-src.
-git clone <this-repo> /srv/portal-src
-cd /srv/portal-src
+# Common choices: /srv/portal, /opt/portal, ~/portal. Pick what fits
+# your host layout; the examples below use /srv/portal.
+git clone <this-repo> /srv/portal
+cd /srv/portal
 
 # Bootstrap host state (idempotent, safe to re-run)
-./srv/portal/bin/bootstrap.sh
+./bin/bootstrap.sh
 
 # Start the stacks (nginx first so Traefik finds a ready backend)
-docker compose -f srv/portal/nginx/docker-compose.yml up -d
-docker compose -f srv/portal/docker-compose.yml up -d
+docker compose -f nginx/docker-compose.yml up -d
+docker compose -f docker-compose.yml up -d
 
 # Sanity check
-./srv/portal/bin/verify-networks.sh
-./srv/portal/bin/list-sites.sh
+./bin/verify-networks.sh
+./bin/list-sites.sh
 ```
 
 ### Add a site
 
 ```bash
 # Provision (creates 3 artifacts, tests config, reloads nginx)
-./srv/portal/bin/provision-site.sh example.com
+./bin/provision-site.sh example.com
 
 # Deploy real content into $PORTAL_DIR/nginx/sites/<fqdn>/
-rsync -av build/ ./srv/portal/nginx/sites/example.com/
+rsync -av build/ ./nginx/sites/example.com/
 
 # First request triggers ACME cert issuance (requires :80 reachable on public IP)
 curl -I https://example.com/
@@ -389,16 +388,16 @@ curl -I https://example.com/
 ### Remove a site
 
 ```bash
-./srv/portal/bin/deprovision-site.sh example.com --dry-run   # preview
-./srv/portal/bin/deprovision-site.sh example.com             # type FQDN to confirm
+./bin/deprovision-site.sh example.com --dry-run   # preview
+./bin/deprovision-site.sh example.com             # type FQDN to confirm
 ```
 
 ### Audit
 
 ```bash
-./srv/portal/bin/list-sites.sh               # table view
-./srv/portal/bin/list-sites.sh --probe       # + reachability checks
-./srv/portal/bin/list-sites.sh --drift-only  # only show misconfigured sites
+./bin/list-sites.sh               # table view
+./bin/list-sites.sh --probe       # + reachability checks
+./bin/list-sites.sh --drift-only  # only show misconfigured sites
 ```
 
 ---
@@ -412,8 +411,8 @@ The scripts honor `NGINX_CONTAINER` / `TRAEFIK_CONTAINER` environment variables 
 export NGINX_CONTAINER=staging-nginx
 export TRAEFIK_CONTAINER=staging-traefik
 
-./srv/portal/bin/verify-networks.sh
-./srv/portal/bin/provision-site.sh staging.example.com
+./bin/verify-networks.sh
+./bin/provision-site.sh staging.example.com
 ```
 
 The compose files still pin `container_name: nginx` / `container_name: traefik` by default, so you'll need to override those via a compose override file or edit the compose files to match your container names. The env-var plumbing is there so the scripts don't need to be forked.

@@ -9,13 +9,13 @@
 # Shell scripts — supply-chain sensitive; subtle changes to the FQDN
 # regex or the rm -rf paths could introduce command injection or
 # unsafe deletes. Require maintainer review on every change.
-/srv/portal/bin/*.sh                @crxnit
+/bin/*.sh                @crxnit
 
 # Traefik + nginx config templates. Changes here alter the shipped
 # security posture for every downstream deployment.
-/srv/portal/traefik/                @crxnit
-/srv/portal/nginx/                  @crxnit
-/srv/portal/docker-compose.yml      @crxnit
+/traefik/                @crxnit
+/nginx/                  @crxnit
+/docker-compose.yml      @crxnit
 
 # Security-policy docs and CI configuration
 SECURITY.md                         @crxnit

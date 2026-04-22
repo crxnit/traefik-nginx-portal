@@ -23,8 +23,8 @@ git checkout -b feat/your-change
 pre-commit run --all-files
 
 # 5. Smoke test your scripts
-bash -n srv/portal/bin/*.sh
-./srv/portal/bin/list-sites.sh
+bash -n bin/*.sh
+./bin/list-sites.sh
 
 # 6. Push and open a PR against main
 ```
@@ -52,7 +52,7 @@ These are not enforceable by tooling but will come up in review.
 
 - **`set -euo pipefail`** at the top of every executable script. Use `|| true` explicitly if a non-zero exit is genuinely OK.
 - **Portable to bash 3.2.** macOS still ships bash 3.2.57. Avoid `${var,,}` (use `tr '[:upper:]' '[:lower:]'`), `${!prefix@}`, and associative-array features that aren't in 3.2.
-- **Use the shared library.** `srv/portal/bin/_lib.sh` provides `log_info`/`log_ok`/`log_warn`/`log_error`/`log_skip`/`die`, `write_atomic`, `validate_fqdn`, `acquire_portal_lock`, and `nginx_reload`. Don't inline equivalents.
+- **Use the shared library.** `bin/_lib.sh` provides `log_info`/`log_ok`/`log_warn`/`log_error`/`log_skip`/`die`, `write_atomic`, `validate_fqdn`, `acquire_portal_lock`, and `nginx_reload`. Don't inline equivalents.
 - **Atomic writes.** Generated files go through `write_atomic`. Don't revert to `cat > $TARGET <<EOF` — an interrupted write is worse than no write.
 - **`$PORTAL_DIR` for non-script paths.** `_lib.sh` exports `PORTAL_DIR`; scripts reference it for `nginx/`, `traefik/`, compose files, logs, locks. Keep `$SCRIPT_DIR` (the `bin/` directory) for invoking sibling scripts.
 

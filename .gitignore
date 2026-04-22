@@ -1,28 +1,31 @@
 # Secrets — ACME private keys and self-signed default TLS cert
-srv/portal/traefik/acme.json
-srv/portal/traefik/certs/
+traefik/acme.json
+traefik/certs/
 
 # Generated per-site Traefik dynamic files; keep underscore-prefixed shared files
-srv/portal/traefik/dynamic/*.yml
-srv/portal/traefik/dynamic/*.yaml
-!srv/portal/traefik/dynamic/_*.yml
-!srv/portal/traefik/dynamic/_*.yaml
+traefik/dynamic/*.yml
+traefik/dynamic/*.yaml
+!traefik/dynamic/_*.yml
+!traefik/dynamic/_*.yaml
 
 # Generated per-site nginx configs; keep default catchall
-srv/portal/nginx/conf.d/*.conf
-!srv/portal/nginx/conf.d/00-default.conf
+nginx/conf.d/*.conf
+!nginx/conf.d/00-default.conf
 
 # Provisioned site content; keep the default landing page
-srv/portal/nginx/sites/*
-!srv/portal/nginx/sites/default/
+nginx/sites/*
+!nginx/sites/default/
 
 # Binary blobs / backup archives
 archive/
 
 # Runtime artifacts
-srv/portal/.portal.lock
-srv/portal/logs/
+.portal.lock
+logs/
 
 # OS / editor cruft
 .DS_Store
 *.swp
+
+# Claude Code local session state
+.claude/

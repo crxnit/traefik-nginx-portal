@@ -33,7 +33,7 @@ HEALTH_POLL_INTERVAL=3
 
 # --- Globals (initialized by main) -----------------------------------------
 
-INSTALL_DIR="/opt/traefik-nginx-portal"
+INSTALL_DIR="/srv/portal"
 ACME_EMAIL=""
 INITIAL_FQDN=""
 SPA_MODE="no"
@@ -194,11 +194,11 @@ docker_compose_cmd() {
     fi
 }
 
-# Run a command inside ${INSTALL_DIR}/srv/portal. Used for every compose /
+# Run a command inside ${INSTALL_DIR}. Used for every compose /
 # helper-script invocation in phases 4-5 so the cd+subshell pattern lives
 # in one place.
 run_in_portal() {
-    ( cd "${INSTALL_DIR}/srv/portal" && "$@" )
+    ( cd "${INSTALL_DIR}" && "$@" )
 }
 
 # Probe a URL and return just its HTTP status code (or 000 on failure).
@@ -247,8 +247,8 @@ phase0_existing_config_guard() {
         fi
     fi
 
-    if [ -z "$found" ] && [ -d "${INSTALL_DIR}/srv/portal" ]; then
-        found="install directory ${INSTALL_DIR}/srv/portal"
+    if [ -z "$found" ] && [ -f "${INSTALL_DIR}/docker-compose.yml" ] && [ -d "${INSTALL_DIR}/bin" ]; then
+        found="install directory ${INSTALL_DIR} (contains docker-compose.yml and bin/)"
     fi
 
     if [ -n "$found" ]; then
@@ -411,7 +411,7 @@ phase4_install() {
     git clone "$REPO_URL" "$INSTALL_DIR"
 
     log_step "Patching ACME email in $TRAEFIK_YML_SUBPATH"
-    local traefik_yml="${INSTALL_DIR}/srv/portal/${TRAEFIK_YML_SUBPATH}"
+    local traefik_yml="${INSTALL_DIR}/${TRAEFIK_YML_SUBPATH}"
     [ -f "$traefik_yml" ] || { log_error "Missing: $traefik_yml"; exit 1; }
     sed -i "s|${ACME_EMAIL_PLACEHOLDER}|${ACME_EMAIL}|g" "$traefik_yml"
     if ! grep -q "$ACME_EMAIL" "$traefik_yml"; then
@@ -504,9 +504,9 @@ phase6_final_log() {
 ${GREEN}${BOLD}Install complete.${RESET}
 
 Next steps:
-  - Provision more sites:   ${INSTALL_DIR}/srv/portal/bin/provision-site.sh <fqdn>
-  - Interactive menu:       ${INSTALL_DIR}/srv/portal/bin/menu.sh
-  - Verify at any time:     ${INSTALL_DIR}/srv/portal/bin/verify-networks.sh
+  - Provision more sites:   ${INSTALL_DIR}/bin/provision-site.sh <fqdn>
+  - Interactive menu:       ${INSTALL_DIR}/bin/menu.sh
+  - Verify at any time:     ${INSTALL_DIR}/bin/verify-networks.sh
   - Install log:            ${INSTALL_LOG:-<not captured>}
 
 Point DNS for your site(s) at this host and Let's Encrypt will issue certs

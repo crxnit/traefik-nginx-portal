@@ -6,18 +6,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Provisioning scripts and configuration for a two-container web-hosting stack: **Traefik** (TLS termination + routing) in front of **nginx** (serving static sites). One Traefik instance fronts many nginx-hosted sites; each site is provisioned/deprovisioned via shell scripts that write three coordinated artifacts.
 
-All runtime state lives under `srv/portal/` in the repo. The scripts resolve their own directory at runtime (`SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"`), so the repo works at any checkout location: `/srv/portal/`, `/srv/ai/portal/`, `/opt/portal/`, etc. Docker Compose volume mounts are relative (`./traefik/...`), so they follow automatically. Paths like `/srv/portal/` in examples throughout this doc are conventional — substitute your actual path. `$PORTAL_DIR` in prose means "wherever the portal is checked out".
+The repo root IS the portal root — `bin/`, `nginx/`, `traefik/`, and `docker-compose.yml` all sit at the top level. The scripts resolve their own directory at runtime (`SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"`), so the portal works at any checkout location: `/srv/portal/`, `/srv/ai/`, `/opt/portal/`, etc. Docker Compose volume mounts are relative (`./traefik/...`), so they follow the repo wherever it sits. Paths like `/srv/portal/` in examples throughout this doc are conventional — substitute your actual path. `$PORTAL_DIR` in prose means "wherever the portal is checked out" and equals `$REPO_ROOT`.
 
 ## Architecture
 
 Two independent compose stacks that meet on shared Docker networks:
 
-- `srv/portal/docker-compose.yml` — Traefik (`traefik:v3.3.4`, patch-pinned) on networks `traefik` + `edge`, ports 80/443, plus an internal `:8082/ping` entrypoint for the container healthcheck. Reads static config from `traefik/traefik.yml` and watches `traefik/dynamic/` for per-site router files. Let's Encrypt HTTP-01 challenge; certs persist in `traefik/acme.json` (bind mount; writable even with `read_only: true`).
-- `srv/portal/nginx/docker-compose.yml` — `nginx:1.27-alpine` (minor-line pinned) on the `edge` network only (no host ports — Traefik reaches it over `edge`). Hardened: `read_only` root FS, `cap_drop ALL`, `no-new-privileges`, tmpfs for `/var/cache/nginx`, `/var/run`, `/tmp`. Healthcheck hits `http://127.0.0.1/` (handled by the `00-default.conf` catchall).
+- `docker-compose.yml` — Traefik (`traefik:v3.3.4`, patch-pinned) on networks `traefik` + `edge`, ports 80/443, plus an internal `:8082/ping` entrypoint for the container healthcheck. Reads static config from `traefik/traefik.yml` and watches `traefik/dynamic/` for per-site router files. Let's Encrypt HTTP-01 challenge; certs persist in `traefik/acme.json` (bind mount; writable even with `read_only: true`).
+- `nginx/docker-compose.yml` — `nginx:1.27-alpine` (minor-line pinned) on the `edge` network only (no host ports — Traefik reaches it over `edge`). Hardened: `read_only` root FS, `cap_drop ALL`, `no-new-privileges`, tmpfs for `/var/cache/nginx`, `/var/run`, `/tmp`. Healthcheck hits `http://127.0.0.1/` (handled by the `00-default.conf` catchall).
 
 **nginx logging under `read_only`:** there is no writable path for `/var/log/nginx/` inside the container. `nginx.conf` writes `access_log /var/log/nginx/access.log` / `error_log /var/log/nginx/error.log`, which works because the `nginx:alpine` image ships those paths as symlinks to `/dev/stdout` / `/dev/stderr`. Do NOT introduce any other `access_log`/`error_log` paths in `conf.d/*.conf` — new filenames have no symlink, and nginx will fail to start trying to create them in a read-only dir. If per-site on-disk logs are ever wanted, add `./logs:/var/log/nginx` as a bind mount *and* drop `read_only: true`.
 
-Both networks (`traefik`, `edge`) are declared `external: true` and must exist before either stack starts. Run `srv/portal/bin/bootstrap.sh` once per host — it chains `create-docker-networks.sh`, the `acme.json` preflight (touch + chmod 600), and `ensure-default-tls.sh` in the correct order, and is safe to re-run. Verify wiring with `srv/portal/bin/verify-networks.sh` (expects `traefik → edge,traefik` and `nginx → edge`).
+Both networks (`traefik`, `edge`) are declared `external: true` and must exist before either stack starts. Run `bin/bootstrap.sh` once per host — it chains `create-docker-networks.sh`, the `acme.json` preflight (touch + chmod 600), and `ensure-default-tls.sh` in the correct order, and is safe to re-run. Verify wiring with `bin/verify-networks.sh` (expects `traefik → edge,traefik` and `nginx → edge`).
 
 `acme.json` is not committed — `bootstrap.sh` creates it with mode 600 on demand. Without the preflight, `docker compose up` silently auto-creates the bind-mount path as a root-owned directory, which breaks Traefik permanently; `bootstrap.sh` is how you avoid that class of failure.
 
@@ -25,15 +25,15 @@ Both networks (`traefik`, `edge`) are declared `external: true` and must exist b
 
 A provisioned site has three coordinated artifacts that `list-sites.sh` treats as the sources of truth:
 
-1. `srv/portal/nginx/conf.d/<fqdn>.conf` — nginx server block (listens on :80 inside the edge network, `server_name <fqdn>`, roots at `/var/www/<fqdn>`). Logs fall through to stdout/stderr via `nginx.conf`'s global `access_log`/`error_log` — no per-site log files.
-2. `srv/portal/nginx/sites/<fqdn>/` — content directory (placeholder `index.html` created at provision time).
-3. `srv/portal/traefik/dynamic/<fqdn>.yml` — Traefik dynamic router: `Host(\`<fqdn>\`)` on `websecure` → service `nginx-backend`, middlewares `security-headers@file` + `rate-limit@file`, TLS via `letsencrypt` resolver.
+1. `nginx/conf.d/<fqdn>.conf` — nginx server block (listens on :80 inside the edge network, `server_name <fqdn>`, roots at `/var/www/<fqdn>`). Logs fall through to stdout/stderr via `nginx.conf`'s global `access_log`/`error_log` — no per-site log files.
+2. `nginx/sites/<fqdn>/` — content directory (placeholder `index.html` created at provision time).
+3. `traefik/dynamic/<fqdn>.yml` — Traefik dynamic router: `Host(\`<fqdn>\`)` on `websecure` → service `nginx-backend`, middlewares `security-headers@file` + `rate-limit@file`, TLS via `letsencrypt` resolver.
 
 If any one of these is missing, `list-sites.sh` reports **drift**. The provision and deprovision scripts always act on all three together. `provision-site.sh` has an `EXIT` trap that rolls back any artifacts it created if `nginx -t` or another step fails partway — the refuse-to-overwrite guard protects against re-provisioning but cleanup happens automatically on failure. Note: the rollback is safe to `rm -rf` the site dir *only because* the guard prevents re-running over a populated site; if the guard is ever relaxed, the rollback must also be tightened (see `IDEMPOTENCY_AUDIT.md` finding L1).
 
 ### Shared script helpers
 
-`srv/portal/bin/_lib.sh` is sourced by every other script in `bin/`. It provides the shared vocabulary so scripts stay terse and consistent. Intentionally has no shebang — it's a library, sourced not invoked; uses a `# shellcheck shell=bash` directive instead so shellcheck still knows the dialect. Exports `$PORTAL_DIR` (the absolute path of the portal root, computed at source time); callers use `$PORTAL_DIR` for non-script paths (`nginx/`, `traefik/`, compose files, `logs/`, the lock file) and `$SCRIPT_DIR` for invoking sibling scripts.
+`bin/_lib.sh` is sourced by every other script in `bin/`. It provides the shared vocabulary so scripts stay terse and consistent. Intentionally has no shebang — it's a library, sourced not invoked; uses a `# shellcheck shell=bash` directive instead so shellcheck still knows the dialect. Exports `$PORTAL_DIR` (the absolute path of the portal root, computed at source time); callers use `$PORTAL_DIR` for non-script paths (`nginx/`, `traefik/`, compose files, `logs/`, the lock file) and `$SCRIPT_DIR` for invoking sibling scripts.
 
 **Colors (TTY-aware; empty strings when output is piped):** `GREEN`, `YELLOW`, `RED`, `BLUE`, `BOLD`, `DIM`, `RESET`.
 
@@ -75,12 +75,12 @@ Things that will be rejected: `:latest` or unpinned images, unsigned commits, ba
 
 ## Common commands
 
-All commands assume cwd = `srv/portal/`.
+All commands assume cwd = ``.
 
 ```bash
 # Interactive menu covering every operator action (wraps the scripts below).
 # Requires a TTY. For non-interactive use, invoke the scripts directly.
-# Writes an audit log to srv/portal/logs/menu.log (gitignored).
+# Writes an audit log to logs/menu.log (gitignored).
 ./bin/menu.sh
 ./bin/menu.sh --cheatsheet     # non-interactive CLI reference
 
@@ -132,9 +132,9 @@ curl -fsSL https://raw.githubusercontent.com/crxnit/traefik-nginx-portal/main/in
 curl -fsSL https://raw.githubusercontent.com/crxnit/traefik-nginx-portal/main/install.sh -o install.sh && bash install.sh
 ```
 
-Structure: 7 phases (existing-config guard, dependency checks, prompts, confirm, install, verify, cleanup + final log). Writes a full session log to `/var/log/portal-install-TIMESTAMP.log` (falls back to `$HOME/` if unwritable) and emits syslog entries via `logger -t portal-install` at each phase. Exits 0 without changes if an existing installation is detected (running `nginx`/`traefik` container, `traefik`/`edge` network, or populated `$INSTALL_DIR/srv/portal/`). When curl-piped, reopens stdin from `/dev/tty` so prompts still work.
+Structure: 7 phases (existing-config guard, dependency checks, prompts, confirm, install, verify, cleanup + final log). Writes a full session log to `/var/log/portal-install-TIMESTAMP.log` (falls back to `$HOME/` if unwritable) and emits syslog entries via `logger -t portal-install` at each phase. Exits 0 without changes if an existing installation is detected (running `nginx`/`traefik` container, `traefik`/`edge` network, or `$INSTALL_DIR/docker-compose.yml` + `$INSTALL_DIR/bin/` both present). When curl-piped, reopens stdin from `/dev/tty` so prompts still work.
 
-**CI scope gap (know before editing):** `.github/workflows/ci.yml` globs `srv/portal/bin/*.sh` for both `bash -n` and shellcheck, so `install.sh` at the repo root is NOT covered by CI. Keep it bash-3.2-compatible (the installer targets Linux servers at runtime, but the source must still parse under macOS bash 3.2 to match the house rule) and shellcheck-clean manually. The one intentional `# shellcheck disable=SC2086` is on `$spa_flag` in phase 4.
+**CI scope gap (know before editing):** `.github/workflows/ci.yml` globs `bin/*.sh` for both `bash -n` and shellcheck, so `install.sh` at the repo root is NOT covered by CI. Keep it bash-3.2-compatible (the installer targets Linux servers at runtime, but the source must still parse under macOS bash 3.2 to match the house rule) and shellcheck-clean manually. The one intentional `# shellcheck disable=SC2086` is on `$spa_flag` in phase 4.
 
 ## Conventions
 

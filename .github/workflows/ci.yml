@@ -28,7 +28,7 @@ jobs:
       - name: Syntax-check every shell script
         run: |
           fail=0
-          for f in srv/portal/bin/*.sh; do
+          for f in bin/*.sh install.sh; do
             echo "→ $f"
             bash -n "$f" || fail=1
           done
@@ -46,7 +46,8 @@ jobs:
       - uses: ludeeus/action-shellcheck@master
         with:
           severity: warning
-          scandir: ./srv/portal/bin
+          scandir: ./bin
+          additional_files: install.sh
 
   # Secrets scan — catches private keys, API tokens, AWS credentials,
   # etc. that sneak in through a rushed commit. Runs on the full git

@@ -179,11 +179,11 @@ fi
 # Prefer `git rev-parse` over a hardcoded relative path so the check keeps
 # working if the repo is ever restructured; fall back to the old assumption
 # when git isn't available or the dir isn't a working tree.
-repo_root=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || echo "${PORTAL_DIR}/../..")
+repo_root=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || echo "$PORTAL_DIR")
 gitignore="${repo_root}/.gitignore"
 if [[ -f "$gitignore" ]] && ! grep -q 'traefik/certs' "$gitignore"; then
     log_warn "Private key lives under traefik/certs/ — consider adding to .gitignore:"
-    echo "        srv/portal/traefik/certs/"
+    echo "        traefik/certs/"
 fi
 
 echo

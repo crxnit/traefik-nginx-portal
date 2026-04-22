@@ -6,7 +6,7 @@ Reference for infrastructure engineers operating or extending the portal's shell
 
 **Not for:** app developers (see `APP_DEVELOPMENT_PROMPT.md` / `APP_MIGRATION_PROMPT.md`) or AI context priming (see `CLAUDE.md`).
 
-> **Path convention.** Every script resolves its own directory at runtime via `SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"`, so the repo works at any checkout path: `/srv/portal-src/`, `/srv/ai/portal-src/`, `/opt/portal/`, `~/work/portal/` — all equivalent. Docker Compose volume mounts are relative (`./traefik/...`), so they follow the repo wherever it sits. Examples in this guide use `/srv/portal-src/` as a conventional clone target; substitute your path when running commands. Where prose mentions a concrete file location, `$PORTAL_DIR` means "the `srv/portal/` directory inside your clone" — e.g., `$PORTAL_DIR/logs/menu.log` is `/srv/portal-src/srv/portal/logs/menu.log` if you cloned to `/srv/portal-src/`, or `/srv/ai/portal-src/srv/portal/logs/menu.log` if you cloned to `/srv/ai/portal-src/`.
+> **Path convention.** Every script resolves its own directory at runtime via `SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"`, so the repo works at any checkout path: `/srv/portal/`, `/srv/ai/`, `/opt/portal/`, `~/work/portal/` — all equivalent. Docker Compose volume mounts are relative (`./traefik/...`), so they follow the repo wherever it sits. Examples in this guide use `/srv/portal/` as a conventional clone target; substitute your path when running commands. The repo root IS the portal root, so `$PORTAL_DIR` means "your clone directory" — e.g., `$PORTAL_DIR/logs/menu.log` is `/srv/portal/logs/menu.log` if you cloned to `/srv/portal/`, or `/srv/ai/logs/menu.log` if you cloned to `/srv/ai/`.
 
 ---
 
@@ -24,7 +24,7 @@ Reference for infrastructure engineers operating or extending the portal's shell
 | Force-regenerate the default TLS cert | `./bin/ensure-default-tls.sh --force` |
 | See CLI-equivalent reference without the menu | `./bin/menu.sh --cheatsheet` |
 
-All commands run from `srv/portal/`. Every script sources `_lib.sh` for shared helpers — you don't need to; it's automatic.
+All commands run from ``. Every script sources `_lib.sh` for shared helpers — you don't need to; it's automatic.
 
 ---
 
@@ -66,7 +66,7 @@ Container states come from `docker inspect`, so `absent`/`exited`/`restarting` a
 
 ### 2.4 Audit log
 
-`menu.sh` writes every session and every action to `srv/portal/logs/menu.log` (gitignored, mode 600). Format: one event per line, UTC timestamp, key=value payload:
+`menu.sh` writes every session and every action to `logs/menu.log` (gitignored, mode 600). Format: one event per line, UTC timestamp, key=value payload:
 
 ```
 2026-04-20T16:20:20Z session_start user=john host=prod-1 pid=38341 tty=/dev/pts/0
@@ -353,22 +353,22 @@ bin/menu.sh
 
 ```bash
 # 1. Clone repo — target is arbitrary, pick what fits your host
-git clone <repo-url> /srv/portal-src         # or /srv/ai/portal-src, /opt/portal, etc.
-cd /srv/portal-src
+git clone <repo-url> /srv/portal             # or /srv/ai, /opt/portal, etc.
+cd /srv/portal
 
 # 2. (Option A) Run bootstrap directly
-./srv/portal/bin/bootstrap.sh
+./bin/bootstrap.sh
 
 # 2. (Option B) Run bootstrap through the menu and get the audit log
-cd srv/portal && ./bin/menu.sh   # pick option 1
+./bin/menu.sh   # pick option 1
 
 # 3. Start stacks (nginx first)
-docker compose -f srv/portal/nginx/docker-compose.yml up -d
-docker compose -f srv/portal/docker-compose.yml up -d
+docker compose -f nginx/docker-compose.yml up -d
+docker compose -f docker-compose.yml up -d
 
 # 4. Verify
-./srv/portal/bin/verify-networks.sh
-./srv/portal/bin/list-sites.sh
+./bin/verify-networks.sh
+./bin/list-sites.sh
 ```
 
 ### 6.2 Onboard a new site (static)
@@ -378,32 +378,32 @@ docker compose -f srv/portal/docker-compose.yml up -d
 dig +short myapp.example.com    # should return the host's public IP
 
 # 2. Provision — creates 3 artifacts, reloads nginx
-./srv/portal/bin/provision-site.sh myapp.example.com
+./bin/provision-site.sh myapp.example.com
 # (add --spa if it's a client-side-routed SPA)
 
 # 3. Deploy content (target is $PORTAL_DIR/nginx/sites/<fqdn>/)
-rsync -av myapp/dist/ ./srv/portal/nginx/sites/myapp.example.com/
+rsync -av myapp/dist/ ./nginx/sites/myapp.example.com/
 
 # 4. First HTTPS request triggers ACME (allow 10-30s)
 curl -I https://myapp.example.com/
 
 # 5. Confirm
-./srv/portal/bin/list-sites.sh --probe   # LIVE=yes, HTTPS=2xx
+./bin/list-sites.sh --probe   # LIVE=yes, HTTPS=2xx
 ```
 
 ### 6.3 Onboard a new site (dynamic container)
 
 ```bash
 # 1. DNS + provision as above
-./srv/portal/bin/provision-site.sh myapp.example.com --no-reload
+./bin/provision-site.sh myapp.example.com --no-reload
 # --no-reload because we'll replace the Traefik yaml below
 
-# 2. Drop the app's compose file at srv/portal/apps/myapp/docker-compose.yml
+# 2. Drop the app's compose file at apps/myapp/docker-compose.yml
 #    (see APP_DEVELOPMENT_PROMPT.md for the template)
 
 # 3. Overwrite the auto-generated Traefik dynamic yaml with one pointing at
 #    the app container instead of nginx-backend
-cat > srv/portal/traefik/dynamic/myapp.example.com.yml <<'EOF'
+cat > traefik/dynamic/myapp.example.com.yml <<'EOF'
 http:
   services:
     myapp:
@@ -422,16 +422,16 @@ http:
 EOF
 
 # 4. Start the app container
-docker compose -f srv/portal/apps/myapp/docker-compose.yml up -d
+docker compose -f apps/myapp/docker-compose.yml up -d
 
 # 5. Also delete the placeholder nginx conf + content dir since this site
 #    is served by the container, not nginx
-rm srv/portal/nginx/conf.d/myapp.example.com.conf
-rm -rf srv/portal/nginx/sites/myapp.example.com
-./srv/portal/bin/reload-nginx.sh
+rm nginx/conf.d/myapp.example.com.conf
+rm -rf nginx/sites/myapp.example.com
+./bin/reload-nginx.sh
 
 # 6. Verify
-./srv/portal/bin/list-sites.sh --probe
+./bin/list-sites.sh --probe
 ```
 
 Note: the current `provision-site.sh` assumes the nginx-served case. Dynamic-container sites require manual adjustment of steps 3 and 5. If you onboard many dynamic apps, a `provision-dynamic-site.sh` variant would be a reasonable addition (see § 10).
@@ -440,29 +440,29 @@ Note: the current `provision-site.sh` assumes the nginx-served case. Dynamic-con
 
 ```bash
 # 1. Preview
-./srv/portal/bin/deprovision-site.sh myapp.example.com --dry-run
+./bin/deprovision-site.sh myapp.example.com --dry-run
 
 # 2. Remove (interactive — type the FQDN to confirm)
-./srv/portal/bin/deprovision-site.sh myapp.example.com
+./bin/deprovision-site.sh myapp.example.com
 
 # 3. Keep the content but remove configs
-./srv/portal/bin/deprovision-site.sh myapp.example.com --yes --keep-content
+./bin/deprovision-site.sh myapp.example.com --yes --keep-content
 ```
 
 ### 6.5 Investigate drift
 
 ```bash
 # Table view of all sites
-./srv/portal/bin/list-sites.sh
+./bin/list-sites.sh
 
 # Only broken ones
-./srv/portal/bin/list-sites.sh --drift-only
+./bin/list-sites.sh --drift-only
 
 # With probes (requires running stacks)
-./srv/portal/bin/list-sites.sh --probe
+./bin/list-sites.sh --probe
 
 # JSON for scripting
-./srv/portal/bin/list-sites.sh --format json | jq '.[] | select(.drift=="yes")'
+./bin/list-sites.sh --format json | jq '.[] | select(.drift=="yes")'
 ```
 
 Common drift patterns:
@@ -476,10 +476,10 @@ Fix options: re-provision (if you want the site back) or deprovision to clean up
 
 ```bash
 # Check current expiry
-./srv/portal/bin/ensure-default-tls.sh    # will auto-regenerate if within 30 days
+./bin/ensure-default-tls.sh    # will auto-regenerate if within 30 days
 
 # Force now (e.g., if you changed the CN or key size)
-./srv/portal/bin/ensure-default-tls.sh --force
+./bin/ensure-default-tls.sh --force
 
 # Traefik picks up the new cert automatically via file-watch on dynamic/
 ```
@@ -488,13 +488,13 @@ Fix options: re-provision (if you want the site back) or deprovision to clean up
 
 ```bash
 # 1. Check container states
-./srv/portal/bin/verify-networks.sh
+./bin/verify-networks.sh
 
 # 2. Check drift
-./srv/portal/bin/list-sites.sh --drift-only
+./bin/list-sites.sh --drift-only
 
 # 3. Check Traefik for routing errors
-docker compose -f srv/portal/docker-compose.yml logs --tail=100 traefik | grep -iE 'error|acme'
+docker compose -f docker-compose.yml logs --tail=100 traefik | grep -iE 'error|acme'
 
 # 4. Check nginx config
 docker exec nginx nginx -t
@@ -503,8 +503,8 @@ docker exec nginx nginx -t
 docker exec traefik cat /acme.json | jq '.letsencrypt.Certificates[] | .domain'
 
 # 6. Check the operator audit log — who did what, when, exit code
-tail -50 srv/portal/logs/menu.log
-grep 'exit=[1-9]' srv/portal/logs/menu.log   # non-zero exits only
+tail -50 logs/menu.log
+grep 'exit=[1-9]' logs/menu.log   # non-zero exits only
 ```
 
 ### 6.8 Run alongside a second portal instance on the same host
@@ -517,9 +517,9 @@ grep 'exit=[1-9]' srv/portal/logs/menu.log   # non-zero exits only
 
 # Then operate it via env overrides:
 NGINX_CONTAINER=staging-nginx TRAEFIK_CONTAINER=staging-traefik \
-    ./srv/portal/bin/verify-networks.sh
+    ./bin/verify-networks.sh
 
-NGINX_CONTAINER=staging-nginx ./srv/portal/bin/provision-site.sh staging.example.com
+NGINX_CONTAINER=staging-nginx ./bin/provision-site.sh staging.example.com
 ```
 
 Every script that `docker exec`s into nginx or Traefik honors these overrides. `verify-networks.sh`, `list-sites.sh`, `provision-site.sh`, `deprovision-site.sh`, and `reload-nginx.sh` all plumb them through.
@@ -552,23 +552,23 @@ Format: one event per line, UTC timestamp + event type + key=value payload. PID 
 
 ```bash
 # Recent activity
-tail -30 srv/portal/logs/menu.log
+tail -30 logs/menu.log
 
 # All non-zero exits
-grep 'exit=[1-9]' srv/portal/logs/menu.log
+grep 'exit=[1-9]' logs/menu.log
 
 # Every deprovision, chronologically
-grep 'action=deprovision_site' srv/portal/logs/menu.log
+grep 'action=deprovision_site' logs/menu.log
 
 # What did user X do in the last hour?
 awk -v cutoff="$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)" \
-    '$1 > cutoff && /user=alice/' srv/portal/logs/menu.log
+    '$1 > cutoff && /user=alice/' logs/menu.log
 
 # Reconstruct a specific session end-to-end
-grep 'pid=38341' srv/portal/logs/menu.log
+grep 'pid=38341' logs/menu.log
 
 # Count actions by type, descending
-awk -F'action=' '/action_end/ {split($2,a," "); print a[1]}' srv/portal/logs/menu.log \
+awk -F'action=' '/action_end/ {split($2,a," "); print a[1]}' logs/menu.log \
     | sort | uniq -c | sort -rn
 ```
 
@@ -586,9 +586,9 @@ $PORTAL_DIR/logs/menu.log {
 }
 ```
 
-Logrotate config files don't perform shell expansion, so write the literal absolute path in the actual config (e.g. `/srv/portal-src/srv/portal/logs/menu.log`).
+Logrotate config files don't perform shell expansion, so write the literal absolute path in the actual config (e.g. `/srv/portal/logs/menu.log`).
 
-**Do not commit the log.** `.gitignore` covers `srv/portal/logs/` already.
+**Do not commit the log.** `.gitignore` covers `logs/` already.
 
 ### Privacy note
 
@@ -605,7 +605,7 @@ This is a feature for *internal* audit and incident forensics — you can grep b
 # Scrub user, host, and tty. Keeps timestamps, events, pids,
 # actions, exit codes, durations — the forensically-useful bits.
 sed -E 's/ user=[^ ]+/ user=REDACTED/; s/ host=[^ ]+/ host=REDACTED/; s/ tty=[^ ]+/ tty=REDACTED/' \
-    srv/portal/logs/menu.log > menu.log.scrubbed
+    logs/menu.log > menu.log.scrubbed
 ```
 
 Same approach in reverse: if your compliance posture requires *more* identifying info (real names, ticket IDs, change-request numbers), wrap `menu.sh` calls with your own `audit_log_context()` that prepends additional fields — `_lib.sh`'s `audit_log` function just writes key=value pairs, so adding fields is a one-line extension.
@@ -631,7 +631,7 @@ The `flock` mutex caught a concurrent invocation. Normal if you have automation 
 
 ```bash
 # On Linux: lock file is harmless but you can remove it to force
-rm srv/portal/.portal.lock
+rm .portal.lock
 
 # On macOS: no flock installed, this shouldn't happen
 ```
@@ -641,8 +641,8 @@ rm srv/portal/.portal.lock
 Docker auto-created the path. Happens when `docker compose up` ran before `bootstrap.sh`. Recovery requires root:
 
 ```bash
-sudo rm -rf srv/portal/traefik/acme.json
-./srv/portal/bin/bootstrap.sh
+sudo rm -rf traefik/acme.json
+./bin/bootstrap.sh
 docker compose down && docker compose up -d
 ```
 
@@ -651,8 +651,8 @@ docker compose down && docker compose up -d
 Same class of failure: Docker auto-created the path as root-owned. Recovery is in the error message:
 
 ```bash
-sudo rm -rf srv/portal/traefik/certs
-./srv/portal/bin/ensure-default-tls.sh
+sudo rm -rf traefik/certs
+./bin/ensure-default-tls.sh
 ```
 
 ### 9.5 Site provisions but gets 404 from Traefik
@@ -660,12 +660,12 @@ sudo rm -rf srv/portal/traefik/certs
 Check the Traefik dynamic yaml references `nginx-backend`:
 
 ```bash
-grep -l 'service: nginx-backend' srv/portal/traefik/dynamic/*.yml
-ls srv/portal/traefik/dynamic/_shared-services.yml  # must exist
+grep -l 'service: nginx-backend' traefik/dynamic/*.yml
+ls traefik/dynamic/_shared-services.yml  # must exist
 docker compose logs traefik --tail=50 | grep -i error
 ```
 
-If `_shared-services.yml` is missing, every site router fails with "service not found". `bootstrap.sh` creates it indirectly via `ensure-default-tls.sh` (no — that creates `_default-tls.yml`; `_shared-services.yml` is committed to the repo). If it's missing, restore from git: `git checkout -- srv/portal/traefik/dynamic/_shared-services.yml`.
+If `_shared-services.yml` is missing, every site router fails with "service not found". `bootstrap.sh` creates it indirectly via `ensure-default-tls.sh` (no — that creates `_default-tls.yml`; `_shared-services.yml` is committed to the repo). If it's missing, restore from git: `git checkout -- traefik/dynamic/_shared-services.yml`.
 
 ### 9.6 Cert issuance hangs
 
@@ -686,7 +686,7 @@ Common blockers: cloud firewall rule, DNS not yet propagated, `:80` routing rule
 Something tried to write to a path that's read-only under the hardening config. Check for stray `access_log` / `error_log` paths in `conf.d/`:
 
 ```bash
-grep -rE 'access_log|error_log' srv/portal/nginx/conf.d/
+grep -rE 'access_log|error_log' nginx/conf.d/
 ```
 
 The only acceptable log paths are the image-default `/var/log/nginx/access.log` (symlinked to `/dev/stdout`) and `/var/log/nginx/error.log` (symlinked to `/dev/stderr`). Any other path needs its directory added as a `tmpfs:` in `nginx/docker-compose.yml`.
@@ -772,7 +772,7 @@ Rules:
 Use an underscore prefix so `list-sites.sh` FQDN discovery ignores it:
 
 ```bash
-cat > srv/portal/traefik/dynamic/_my-shared-thing.yml <<EOF
+cat > traefik/dynamic/_my-shared-thing.yml <<EOF
 http:
   middlewares:
     my-thing:
@@ -787,7 +787,7 @@ Reference from per-site routers as `my-thing@file`.
 Not enforced yet in CI but recommended:
 
 ```bash
-for f in srv/portal/*.sh srv/portal/nginx/*.sh srv/portal/bin/_lib.sh; do
+for f in *.sh nginx/*.sh bin/_lib.sh; do
     shellcheck "$f"
 done
 ```
@@ -800,20 +800,20 @@ Most findings from the two quality-review passes have been addressed; the remain
 
 | Purpose | Path |
 |---|---|
-| All scripts + shared library | `srv/portal/bin/*.sh` (includes `_lib.sh`) |
-| Traefik static config | `srv/portal/traefik/traefik.yml` |
-| Traefik dynamic shared | `srv/portal/traefik/dynamic/_*.yml` |
-| Traefik dynamic per-site | `srv/portal/traefik/dynamic/<fqdn>.yml` |
-| Traefik ACME state | `srv/portal/traefik/acme.json` (not committed) |
-| Traefik default cert | `srv/portal/traefik/certs/default.{crt,key}` (not committed) |
-| nginx global config | `srv/portal/nginx/nginx.conf` |
-| nginx per-site configs | `srv/portal/nginx/conf.d/<fqdn>.conf` (not committed) |
-| nginx default catchall | `srv/portal/nginx/conf.d/00-default.conf` |
-| Site content | `srv/portal/nginx/sites/<fqdn>/` (not committed) |
-| Default catchall content | `srv/portal/nginx/sites/default/` |
-| Mutex lock | `srv/portal/.portal.lock` (runtime, gitignored) |
-| Audit log | `srv/portal/logs/menu.log` (runtime, gitignored, mode 600) |
-| Operator compose | `srv/portal/docker-compose.yml` (Traefik) + `srv/portal/nginx/docker-compose.yml` |
+| All scripts + shared library | `bin/*.sh` (includes `_lib.sh`) |
+| Traefik static config | `traefik/traefik.yml` |
+| Traefik dynamic shared | `traefik/dynamic/_*.yml` |
+| Traefik dynamic per-site | `traefik/dynamic/<fqdn>.yml` |
+| Traefik ACME state | `traefik/acme.json` (not committed) |
+| Traefik default cert | `traefik/certs/default.{crt,key}` (not committed) |
+| nginx global config | `nginx/nginx.conf` |
+| nginx per-site configs | `nginx/conf.d/<fqdn>.conf` (not committed) |
+| nginx default catchall | `nginx/conf.d/00-default.conf` |
+| Site content | `nginx/sites/<fqdn>/` (not committed) |
+| Default catchall content | `nginx/sites/default/` |
+| Mutex lock | `.portal.lock` (runtime, gitignored) |
+| Audit log | `logs/menu.log` (runtime, gitignored, mode 600) |
+| Operator compose | `docker-compose.yml` (Traefik) + `nginx/docker-compose.yml` |
 
 ---
 

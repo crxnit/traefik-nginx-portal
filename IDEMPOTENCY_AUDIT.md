@@ -31,7 +31,7 @@ The codebase is in **good shape** for idempotency. No script in scope outright f
 
 ### [HIGH] `acme.json` bind mount can be auto-created as a directory on a fresh host  ✓ Fixed
 
-**File:** `srv/portal/docker-compose.yml` (line 12) — addressed via `srv/portal/bootstrap.sh` which `touch`es `acme.json` with mode 600 before Docker sees the path. `acme.json` removed from repo (permission mode doesn't round-trip across git clones). Batch 1.
+**File:** `docker-compose.yml` (line 12) — addressed via `bootstrap.sh` which `touch`es `acme.json` with mode 600 before Docker sees the path. `acme.json` removed from repo (permission mode doesn't round-trip across git clones). Batch 1.
 
 **Current behavior:**
 
@@ -41,7 +41,7 @@ The codebase is in **good shape** for idempotency. No script in scope outright f
 
 **Why this breaks idempotency:**
 
-When a fresh clone of this repo is brought up with `docker compose up -d` before `touch srv/portal/traefik/acme.json && chmod 600 srv/portal/traefik/acme.json`, Docker creates `traefik/acme.json` as a **directory** (owned by root), not an empty file. Traefik then refuses to start because it can't write the ACME state file there. Re-runs of `docker compose up -d` are not self-healing — the user must manually `sudo rm -rf traefik/acme.json && touch traefik/acme.json && chmod 600 ...` to recover.
+When a fresh clone of this repo is brought up with `docker compose up -d` before `touch traefik/acme.json && chmod 600 traefik/acme.json`, Docker creates `traefik/acme.json` as a **directory** (owned by root), not an empty file. Traefik then refuses to start because it can't write the ACME state file there. Re-runs of `docker compose up -d` are not self-healing — the user must manually `sudo rm -rf traefik/acme.json && touch traefik/acme.json && chmod 600 ...` to recover.
 
 This repo happens to have an empty `acme.json` committed (mode 600), so a straight clone works — but a partial checkout, a fresh scaffold, or any host where the file gets cleaned (e.g., `git clean -fdx`) will trigger this.
 
@@ -50,7 +50,7 @@ This repo happens to have an empty `acme.json` committed (mode 600), so a straig
 Add a bootstrap preflight to `create-docker-networks.sh` (or a new `bootstrap.sh`):
 
 ```bash
-ACME="srv/portal/traefik/acme.json"
+ACME="traefik/acme.json"
 if [[ ! -f "$ACME" ]]; then
     touch "$ACME"
     chmod 600 "$ACME"
@@ -66,7 +66,7 @@ Alternately, check & refuse to bring up the stack if `acme.json` doesn't exist a
 
 ### [HIGH] `traefik/certs/` bind mount can be auto-created before `ensure-default-tls.sh` runs  ✓ Fixed
 
-**File:** `srv/portal/docker-compose.yml` (line 11) — `bootstrap.sh` now calls `ensure-default-tls.sh` before Docker sees the path. `ensure-default-tls.sh` also bails with an explicit error + recovery command if the dir exists but is unwritable (Docker-as-root scenario). Batch 1 + Batch 2.
+**File:** `docker-compose.yml` (line 11) — `bootstrap.sh` now calls `ensure-default-tls.sh` before Docker sees the path. `ensure-default-tls.sh` also bails with an explicit error + recovery command if the dir exists but is unwritable (Docker-as-root scenario). Batch 1 + Batch 2.
 
 **Current behavior:**
 
@@ -90,7 +90,7 @@ Have `ensure-default-tls.sh` be part of the bootstrap sequence (called from `boo
 
 ### [MEDIUM] Generated files embed a volatile timestamp  ✓ Fixed
 
-**File:** `srv/portal/provision-site.sh` (lines 207, 245) — `Provisioned:` timestamp dropped from both the nginx conf and Traefik dynamic templates. Generated content is now stable across runs. Batch 3.
+**File:** `provision-site.sh` (lines 207, 245) — `Provisioned:` timestamp dropped from both the nginx conf and Traefik dynamic templates. Generated content is now stable across runs. Batch 3.
 
 **Current behavior:**
 
@@ -125,7 +125,7 @@ Git history (or the dynamic file's mtime) already answers "when was this provisi
 
 ### [MEDIUM] Stale user-facing error message after rollback trap was added  ✓ Fixed
 
-**File:** `srv/portal/provision-site.sh` (lines 273–274) — error now reads "Rollback will clean up the partial provision" + "Fix the underlying config issue and re-run $0 $FQDN". Matches current rollback behavior. Batch 3.
+**File:** `provision-site.sh` (lines 273–274) — error now reads "Rollback will clean up the partial provision" + "Fix the underlying config issue and re-run $0 $FQDN". Matches current rollback behavior. Batch 3.
 
 **Current behavior:**
 
@@ -152,7 +152,7 @@ The rollback trap (lines 141–153) now removes the created files on failure. Th
 
 ### [MEDIUM] `chmod 700` runs unconditionally on `$CERTS_DIR`  ✓ Fixed
 
-**File:** `srv/portal/ensure-default-tls.sh` (line 103) — now only chmods when the dir didn't already exist; existing operator-set perms are preserved. Batch 2.
+**File:** `ensure-default-tls.sh` (line 103) — now only chmods when the dir didn't already exist; existing operator-set perms are preserved. Batch 2.
 
 **Current behavior:**
 
@@ -183,8 +183,8 @@ Low impact in practice — flagging for pattern, not severity.
 ### [MEDIUM] `container_name: traefik` / `container_name: nginx` are global-namespace fixed names  ✓ Fixed (lighter variant)
 
 **Files:**
-- `srv/portal/docker-compose.yml` (line 4)
-- `srv/portal/nginx/docker-compose.yml` (line 4)
+- `docker-compose.yml` (line 4)
+- `nginx/docker-compose.yml` (line 4)
 
 Scripts now honor `NGINX_CONTAINER` and `TRAEFIK_CONTAINER` env vars (default `nginx` / `traefik`). An operator running a second portal on the same host can set `container_name: staging-nginx` in their overridden compose and invoke scripts with `NGINX_CONTAINER=staging-nginx ...` — no fork needed. Compose files themselves still pin the default name, which is a deliberate trade-off: keeps the happy path simple while leaving multi-tenant deploys configurable. Deeper refactor (drop `container_name:`, look up via `docker compose ps -q`) remains deferred. Batches 5–6.
 
@@ -214,7 +214,7 @@ Larger change — defer unless multi-instance deploys are on the roadmap.
 
 ### [LOW] Rollback could wipe user-deployed content in a future scenario  ✗ Deferred by design
 
-**File:** `srv/portal/provision-site.sh` (lines 145–150)
+**File:** `provision-site.sh` (lines 145–150)
 
 This finding is coupled to the refuse-to-overwrite guard at lines 122–131: while the guard is active, rollback can only fire on freshly-created paths (never on a site with deployed content). The guard and the rollback are two halves of the same safety contract. Any future work that relaxes the overwrite guard (e.g., turning provision into a convergent GitOps-style op) must *simultaneously* tighten the rollback path — per the fix suggestion of stat-before-run mtime comparison — or drop the `rm -rf` for `$SITE_DIR` entirely. Tracked here so the coupling is discoverable; no code change today. See Open Question Q1.
 
@@ -239,7 +239,7 @@ Before `rm -rf` in rollback, cross-check that the path was created (not merely p
 
 ### [LOW] `ensure-default-tls.sh` doesn't warn on impending cert expiry  ✓ Fixed
 
-**File:** `srv/portal/ensure-default-tls.sh` (lines 107–109) — now runs `openssl x509 -checkend $((30*86400))` on the skip path and auto-regenerates if the cert expires within 30 days. Verified via `--days 5` smoke test. Batch 2.
+**File:** `ensure-default-tls.sh` (lines 107–109) — now runs `openssl x509 -checkend $((30*86400))` on the skip path and auto-regenerates if the cert expires within 30 days. Verified via `--days 5` smoke test. Batch 2.
 
 **Current behavior:**
 
@@ -263,7 +263,7 @@ Inside the skip branch, run `openssl x509 -in "$CRT_FILE" -noout -checkend $((30
 
 ### [LOW] `docker compose up -d` has no ordering between Traefik and nginx stacks  ✓ Fixed (doc-level)
 
-**Files:** `srv/portal/docker-compose.yml`, `srv/portal/nginx/docker-compose.yml` — `bootstrap.sh` prints the correct order (nginx first, Traefik second) as "Next steps", and `CLAUDE.md` commands block matches. No compose-level `depends_on` added since the two stacks are separate projects — doc-level ordering is the right scope. Batch 4.
+**Files:** `docker-compose.yml`, `nginx/docker-compose.yml` — `bootstrap.sh` prints the correct order (nginx first, Traefik second) as "Next steps", and `CLAUDE.md` commands block matches. No compose-level `depends_on` added since the two stacks are separate projects — doc-level ordering is the right scope. Batch 4.
 
 **Why this is a latent issue:**
 
@@ -278,10 +278,10 @@ Bootstrap documentation orders nginx first, then Traefik (update `CLAUDE.md` boo
 ### [LOW] FQDN validation regex is duplicated across provision and deprovision  ✓ Fixed
 
 **Files:**
-- `srv/portal/provision-site.sh` (line 102)
-- `srv/portal/deprovision-site.sh` (line 108)
+- `provision-site.sh` (line 102)
+- `deprovision-site.sh` (line 108)
 
-Extracted to `srv/portal/_lib.sh::validate_fqdn`; both scripts now `source` it. Single source of truth for the regex. Batch 4.
+Extracted to `_lib.sh::validate_fqdn`; both scripts now `source` it. Single source of truth for the regex. Batch 4.
 
 **Why this is a latent issue:**
 
@@ -289,13 +289,13 @@ Two copies of the same regex. If one is tightened (e.g., to allow uppercase, or 
 
 **Recommended fix:**
 
-Extract the validation to `srv/portal/nginx/_lib.sh` and source from both scripts. Defer unless other shared logic accumulates.
+Extract the validation to `nginx/_lib.sh` and source from both scripts. Defer unless other shared logic accumulates.
 
 ---
 
 ### [LOW] No locking between concurrent `provision-site.sh` / `deprovision-site.sh`  ✓ Fixed
 
-**Files:** `srv/portal/provision-site.sh`, `srv/portal/deprovision-site.sh` — `acquire_portal_lock` helper added to `_lib.sh`; uses `flock` on a `.portal.lock` file. No-op when flock is unavailable (macOS dev hosts); engaged on Linux servers. Batch 4.
+**Files:** `provision-site.sh`, `deprovision-site.sh` — `acquire_portal_lock` helper added to `_lib.sh`; uses `flock` on a `.portal.lock` file. No-op when flock is unavailable (macOS dev hosts); engaged on Linux servers. Batch 4.
 
 **Why this is a latent issue:**
 
@@ -316,7 +316,7 @@ Defer until there's an automation use case.
 
 ### [LOW] `acme.json` committed to the repo with restrictive perms  ✓ Fixed
 
-**File:** `srv/portal/traefik/acme.json` (mode 600, 0 bytes) — file removed from repo; `.gitignore` already excludes it; `bootstrap.sh` creates on demand. Batch 1.
+**File:** `traefik/acme.json` (mode 600, 0 bytes) — file removed from repo; `.gitignore` already excludes it; `bootstrap.sh` creates on demand. Batch 1.
 
 **Current behavior:**
 
@@ -330,7 +330,7 @@ Remove `acme.json` from the repo, add to `.gitignore` (already added), and have 
 
 ## 3. Recurring Patterns & Systemic Recommendations
 
-- **Pattern observed 2 times (both HIGH):** host-side paths that docker-compose bind-mounts implicitly get created by Docker as root-owned directories if a script hasn't set them up first. **Recommendation:** a single `bootstrap.sh` in `srv/portal/` that chains `create-docker-networks.sh` → `touch + chmod 600 acme.json` → `ensure-default-tls.sh`, with a final `Now run: docker compose up -d` message. Codifies the order in script form, not just docs.
+- **Pattern observed 2 times (both HIGH):** host-side paths that docker-compose bind-mounts implicitly get created by Docker as root-owned directories if a script hasn't set them up first. **Recommendation:** a single `bootstrap.sh` in `` that chains `create-docker-networks.sh` → `touch + chmod 600 acme.json` → `ensure-default-tls.sh`, with a final `Now run: docker compose up -d` message. Codifies the order in script form, not just docs.
 - **Missing convention:** generated files (conf.d, dynamic yaml, placeholder HTML) embed timestamps and one-shot guards, making content-hash convergence checks impossible. **Recommendation:** drop timestamps from generated files and move any "provisioned at / by" metadata into a sidecar `.meta.json` or git log.
 - **Testing gap:** no test or CI job verifies that `provision-site.sh → deprovision-site.sh` round-trips cleanly, or that `ensure-default-tls.sh` is safely re-runnable. **Recommendation:** add `test/idempotent.sh` (or a GitHub Action) that: (a) provisions a fake FQDN, (b) runs `list-sites.sh --drift-only` and asserts empty, (c) deprovisions with `--yes --no-reload`, (d) asserts state is clean. Catches regressions cheaply.
 
@@ -366,7 +366,7 @@ Remove `acme.json` from the repo, add to `.gitignore` (already added), and have 
 - **Q1: Is `provision-site.sh`'s refuse-to-overwrite intentional as a safety rail, or should it become convergent (re-apply desired state)?** The current behavior is defensible — it prevents overwriting hand-edited conf.d files — but it means the script is *one-shot*, not idempotent by the strict definition. If the goal is a GitOps-style "run this until the state matches," the guard has to go (and rollback needs the more careful check from finding L1). If the goal is a manual operator tool with a hard safety stop, current behavior is correct. The docs should state which it is.
 - **Q2: Should `acme.json` be committed (mode bits included) or bootstrapped per-host?** Committing sidesteps the Docker-mount issue on clones but relies on unreliable permission-preservation across git. Bootstrapping is cleaner but requires the preflight script to actually run.
 - **Q3: Is concurrent invocation of provision/deprovision part of the threat model?** Single-operator manual workflow → no `flock` needed. Ansible/Terraform calling in parallel → needs locking.
-- **Q4: Should `ensure-default-tls.sh` live at `srv/portal/` or somewhere more discoverable as a bootstrap step?** It's currently alongside verify/list/provision, which suggests equal weight. In practice it runs once per server at setup time, not per-site like provision. Arguable.
+- **Q4: Should `ensure-default-tls.sh` live at `` or somewhere more discoverable as a bootstrap step?** It's currently alongside verify/list/provision, which suggests equal weight. In practice it runs once per server at setup time, not per-site like provision. Arguable.
 
 ---
 
@@ -376,7 +376,7 @@ After the canonical failure-mode reference was completed, I re-audited against t
 
 ### [HIGH — Second Pass] `00-default.conf` per-site log files break nginx under `read_only: true`  ✓ Fixed
 
-**File:** `srv/portal/nginx/conf.d/00-default.conf` (lines 24–25)
+**File:** `nginx/conf.d/00-default.conf` (lines 24–25)
 
 **Current behavior:**
 
@@ -387,7 +387,7 @@ error_log  /var/log/nginx/default-error.log warn;
 
 **Why this breaks at runtime:**
 
-The nginx container is declared `read_only: true` in `srv/portal/nginx/docker-compose.yml` (line 22), with tmpfs mounts only for `/var/cache/nginx`, `/var/run`, and `/tmp`. The stock `nginx.conf`'s `access_log /var/log/nginx/access.log` and `error_log /var/log/nginx/error.log` survive because the `nginx:alpine` image ships those paths as **symlinks** to `/dev/stdout` and `/dev/stderr` — opening the symlink writes to the char device, which doesn't need a writable `/var/log/nginx/`.
+The nginx container is declared `read_only: true` in `nginx/docker-compose.yml` (line 22), with tmpfs mounts only for `/var/cache/nginx`, `/var/run`, and `/tmp`. The stock `nginx.conf`'s `access_log /var/log/nginx/access.log` and `error_log /var/log/nginx/error.log` survive because the `nginx:alpine` image ships those paths as **symlinks** to `/dev/stdout` and `/dev/stderr` — opening the symlink writes to the char device, which doesn't need a writable `/var/log/nginx/`.
 
 But `default-access.log` and `default-error.log` are **new** filenames with no symlink. nginx will call `open(O_CREAT|O_WRONLY)` on them at startup, hit `EROFS`, and fail to start.
 
@@ -415,8 +415,8 @@ Alternative: add `- /var/log/nginx` to the compose `tmpfs:` list — but then lo
 Pinned `traefik:v3.3` → `traefik:v3.3.4` (patch-level) and `nginx:alpine` → `nginx:1.27-alpine` (minor-line pin). Verify against the current stable tags in your registry before your next prod deploy and bump if newer patches exist. Digest-level pinning (`@sha256:...`) is a further step if full reproducibility is needed — left for operator decision.
 
 **Files:**
-- `srv/portal/docker-compose.yml` (line 3): `image: traefik:v3.3`
-- `srv/portal/nginx/docker-compose.yml` (line 3): `image: nginx:alpine`
+- `docker-compose.yml` (line 3): `image: traefik:v3.3`
+- `nginx/docker-compose.yml` (line 3): `image: nginx:alpine`
 
 **Why this is a reproducibility issue:**
 
@@ -448,8 +448,8 @@ Even better: pin to a SHA digest (`image: nginx:1.27-alpine@sha256:abc...`) so i
 Added `write_atomic` helper to `_lib.sh` (mktemp + rename, honors umask so output perms match previous `cat >` behavior). Wired into `provision-site.sh` at all three write sites (site `index.html`, nginx conf, Traefik dynamic yaml) and into `ensure-default-tls.sh` for the dynamic yaml. The cert+key generation path in `ensure-default-tls.sh` uses the same pattern explicitly (mktemp → chmod → mv) because openssl needs to own the file handles. Verified: dynamic file is 644, cert 644, key 600. Batch 3.
 
 **Files:**
-- `srv/portal/provision-site.sh` (lines 164, 205, 243): `cat > "$TARGET" <<EOF ... EOF`
-- `srv/portal/ensure-default-tls.sh` (lines 112–119, 133–143): `openssl req ... -out $CRT_FILE` / `cat > "$DYNAMIC_FILE" <<EOF`
+- `provision-site.sh` (lines 164, 205, 243): `cat > "$TARGET" <<EOF ... EOF`
+- `ensure-default-tls.sh` (lines 112–119, 133–143): `openssl req ... -out $CRT_FILE` / `cat > "$DYNAMIC_FILE" <<EOF`
 
 **Why this is a latent issue:**
 
@@ -480,7 +480,7 @@ Severity is LOW because the window is small and the failure mode is non-catastro
 
 Moved the check into `_lib.sh::validate_fqdn` so both scripts inherit it automatically — the asymmetry is closed at the source. Removed the now-redundant explicit check from `deprovision-site.sh`. Verified with `../evil.com` and `evil/../com` inputs: both rejected. Batch 4.
 
-**File:** `srv/portal/provision-site.sh` (after line 104 — no equivalent check exists)
+**File:** `provision-site.sh` (after line 104 — no equivalent check exists)
 
 **Current behavior:**
 

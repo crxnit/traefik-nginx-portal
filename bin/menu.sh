@@ -24,7 +24,7 @@ TRAEFIK_CONTAINER="${TRAEFIK_CONTAINER:-traefik}"
 
 # --- Audit log -------------------------------------------------------------
 # Every session start/end, every menu choice, and every action invocation
-# is recorded to srv/portal/logs/menu.log for operator audit trails.
+# is recorded to logs/menu.log for operator audit trails.
 # One event per line, key=value format for easy grep/awk:
 #   2026-04-20T12:34:56Z session_start user=john host=mac pid=12345 tty=/dev/ttys003
 #   2026-04-20T12:34:58Z menu_choice choice=10 label=provision_site pid=12345

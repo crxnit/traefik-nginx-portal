@@ -13,8 +13,8 @@ A single-host, multi-tenant web hosting stack built on **Traefik** (TLS terminat
 ## Quickstart
 
 ```bash
-git clone <this-repo> /srv/portal-src
-cd /srv/portal-src/srv/portal
+git clone <this-repo> /srv/portal
+cd /srv/portal
 
 # One-shot host setup (idempotent — safe to re-run)
 ./bin/bootstrap.sh
@@ -32,7 +32,7 @@ docker compose up -d
 ./bin/verify-networks.sh
 ```
 
-> **Before first deploy:** set a real contact email in `srv/portal/traefik/traefik.yml` (the `letsencrypt@example.com` placeholder must be replaced — Let's Encrypt sends expiration warnings there). And ensure DNS for your FQDNs points at the host *before* provisioning, since ACME HTTP-01 validation needs the hostname to resolve.
+> **Before first deploy:** set a real contact email in `traefik/traefik.yml` (the `letsencrypt@example.com` placeholder must be replaced — Let's Encrypt sends expiration warnings there). And ensure DNS for your FQDNs points at the host *before* provisioning, since ACME HTTP-01 validation needs the hostname to resolve.
 
 ## Documentation map
 
