@@ -121,6 +121,21 @@ NGINX_CONTAINER=staging-nginx TRAEFIK_CONTAINER=staging-traefik ./bin/verify-net
 
 No build, no tests, no linter — this is purely shell + config.
 
+## Server installer
+
+`install.sh` at the repo root is a single downloadable script for initial host setup. Distinct from `bin/bootstrap.sh` (which re-runs setup steps on an already-cloned repo), `install.sh` clones the repo, patches the ACME email in `traefik/traefik.yml`, runs `bootstrap.sh`, brings up both compose stacks, and optionally provisions a first site — all from an interactive prompt flow. Intended use: `curl ... | bash` on a fresh Linux server.
+
+```bash
+# On a fresh production server:
+curl -fsSL https://raw.githubusercontent.com/crxnit/traefik-nginx-provisioning-scripts/main/install.sh | bash
+# or download first:
+curl -fsSL https://raw.githubusercontent.com/crxnit/traefik-nginx-provisioning-scripts/main/install.sh -o install.sh && bash install.sh
+```
+
+Structure: 7 phases (existing-config guard, dependency checks, prompts, confirm, install, verify, cleanup + final log). Writes a full session log to `/var/log/portal-install-TIMESTAMP.log` (falls back to `$HOME/` if unwritable) and emits syslog entries via `logger -t portal-install` at each phase. Exits 0 without changes if an existing installation is detected (running `nginx`/`traefik` container, `traefik`/`edge` network, or populated `$INSTALL_DIR/srv/portal/`). When curl-piped, reopens stdin from `/dev/tty` so prompts still work.
+
+**CI scope gap (know before editing):** `.github/workflows/ci.yml` globs `srv/portal/bin/*.sh` for both `bash -n` and shellcheck, so `install.sh` at the repo root is NOT covered by CI. Keep it bash-3.2-compatible (the installer targets Linux servers at runtime, but the source must still parse under macOS bash 3.2 to match the house rule) and shellcheck-clean manually. The one intentional `# shellcheck disable=SC2086` is on `$spa_flag` in phase 4.
+
 ## Conventions
 
 - FQDN validation lives in `_lib.sh::validate_fqdn`: lowercase, at least one dot, DNS-legal, and no path-escape characters. Wildcards and IDN/punycode labels are rejected. Edit the regex there, not in callers.
