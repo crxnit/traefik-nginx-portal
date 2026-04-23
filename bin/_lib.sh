@@ -27,14 +27,19 @@ export PORTAL_DIR
 # --- Colors ----------------------------------------------------------------
 # shellcheck disable=SC2034  # BOLD/DIM are used by callers after sourcing.
 
+# ANSI-C quoting ($'...') stores the actual ESC byte, not the literal
+# 4-char `\033` sequence. Required so callers that pipe color vars
+# through `cat <<EOF` or plain `echo` render colors — those commands
+# don't interpret `\033` the way printf does. Works equally well with
+# printf in log helpers below (the ESC byte passes through as-is).
 if [[ -t 1 ]]; then
-    GREEN='\033[0;32m'
-    YELLOW='\033[0;33m'
-    RED='\033[0;31m'
-    BLUE='\033[0;34m'
-    BOLD='\033[1m'
-    DIM='\033[2m'
-    RESET='\033[0m'
+    GREEN=$'\033[0;32m'
+    YELLOW=$'\033[0;33m'
+    RED=$'\033[0;31m'
+    BLUE=$'\033[0;34m'
+    BOLD=$'\033[1m'
+    DIM=$'\033[2m'
+    RESET=$'\033[0m'
 else
     GREEN='' YELLOW='' RED='' BLUE='' BOLD='' DIM='' RESET=''
 fi
