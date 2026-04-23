@@ -801,6 +801,15 @@ reboot (enabled at the systemd level).
 EOF
 
     # Flush the tee subshell before main returns.
+    #
+    # Order matters: bash 5.1+ tracks process-substitution children in
+    # `wait`, so calling wait while we still hold fd 1 open (pointing
+    # into tee's input pipe) deadlocks — tee blocks waiting for EOF on
+    # its stdin, we block waiting for tee to exit. Close fd 1/2 first
+    # so tee sees EOF and can drain, then wait.
+    if [ -n "$INSTALL_LOG" ]; then
+        exec 1>&- 2>&-
+    fi
     wait 2>/dev/null || true
 }
 
