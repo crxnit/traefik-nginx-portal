@@ -23,6 +23,20 @@ Both networks (`traefik`, `edge`) are declared `external: true` and must exist b
 
 `acme.json` is not committed — `bootstrap.sh` creates it with mode 600 on demand. Without the preflight, `docker compose up` silently auto-creates the bind-mount path as a root-owned directory, which breaks Traefik permanently; `bootstrap.sh` is how you avoid that class of failure.
 
+### Permissions model (hardened-host defenses)
+
+Two umask layers keep the installer and provisioning scripts correct on hardened hosts where the root / portal login umask is 007 or 027 (common when `/etc/login.defs` sets `UMASK 007`):
+
+- `install.sh` sets `umask 022` at the top, and runs `chmod -R u=rwX,go=rX` on the install dir after chowning to the portal user. Covers the git clone and anything created in phase 4 before bootstrap hands off to the portal user.
+- `bin/_lib.sh` sets `umask 022` too — it's sourced by every `bin/` script, so `bootstrap.sh` / `ensure-default-tls.sh` / `provision-site.sh` all produce 644 files and 755 dirs regardless of the portal user's login-shell umask. Edit the umask in `_lib.sh`, not in individual scripts.
+
+Without both layers, bind-mounted configs end up 600/700 on the host (unreadable from inside the containers), and per-site content ends up 660/770 (unreadable by nginx workers). The two container-side failure modes are subtly different:
+
+- **Traefik**: runs as root inside the container, but `cap_drop: ALL` strips `DAC_OVERRIDE` from the cap bounding set — so root loses its usual "ignore file modes" superpower and becomes subject to normal DAC. The compose file therefore explicitly `cap_add: DAC_OVERRIDE` back, which *does* apply to root. Without it, Traefik crash-loops on `open /etc/traefik/traefik.yml: permission denied` before the healthcheck can even run.
+- **nginx**: master runs as root (benefits from `cap_add: DAC_OVERRIDE`), but workers `setuid` to the `nginx` user and **lose all effective capabilities** in the process — caps don't survive setuid without ambient caps or file caps, and we don't set either. Workers do the actual file I/O, so per-site content must be world-readable (644/755) for them to serve it. `cap_add: DAC_OVERRIDE` on the nginx compose is effectively a no-op for this — the umask defense is what makes it work.
+
+Secret files (`acme.json` mode 600, `traefik/certs/default.key` mode 600, `traefik/certs/` dir mode 700) chmod explicitly after creation, so `umask 022` doesn't weaken them. Traefik still reads them because it has `DAC_OVERRIDE` as root; the portal user can read them because it's the owner.
+
 ### The three-files-per-site invariant
 
 A provisioned site has three coordinated artifacts that `list-sites.sh` treats as the sources of truth:
@@ -125,7 +139,11 @@ curl -fsSL https://raw.githubusercontent.com/crxnit/traefik-nginx-portal/main/in
 curl -fsSL https://raw.githubusercontent.com/crxnit/traefik-nginx-portal/main/install.sh -o install.sh && bash install.sh
 ```
 
-Structure: 7 phases (existing-config guard, dependency checks, prompts, confirm, install, verify, cleanup + final log). Writes a full session log to `/var/log/portal-install-TIMESTAMP.log` (falls back to `$HOME/` if unwritable) and emits syslog entries via `logger -t portal-install` at each phase. Exits 0 without changes if an existing installation is detected. When curl-piped, reopens stdin from `/dev/tty` so prompts still work.
+Structure: 7 phases (preflight, dependency checks, prompts, confirm, install, verify, cleanup + final log). Writes a full session log to `/var/log/portal-install-TIMESTAMP.log` (falls back to `$HOME/` if unwritable) and emits syslog entries via `logger -t portal-install` at each phase. Exits 0 without changes if an existing installation is detected. When curl-piped, reopens stdin from `/dev/tty` so prompts still work.
+
+**Phase 0 is two checks, not one.** (1) Existing-install guard: a narrow scan for prior copies of *this* portal (by container/network name and install-dir layout) — exits 0 (benign) if found, since re-running on an already-installed host is usually a mistake not a failure. (2) Port scan: any listener on :80 or :443 (via `ss` → `netstat` → `lsof` fallbacks) exits 1 (error) with a concrete stop-this-service hint. The second check catches webservers/proxies the first one misses — a host-level nginx/Caddy/Apache or a Traefik under a different name.
+
+**Self-elevate + hardened-host defenses.** `install.sh` reads its own file (or re-downloads to `/tmp` when curl-piped) and re-execs under `sudo -E`, so `curl ... | bash` works for any sudo-capable operator. Sets `umask 022` at the top and runs `chmod -R u=rwX,go=rX` on `$INSTALL_DIR` after the chown in phase 4 — both exist because hardened hosts default root's `UMASK` to 007/027 in `/etc/login.defs`, which would otherwise leave `git clone`'d configs at mode 600 (unreadable by the in-container Traefik once `cap_drop: ALL` removes `DAC_OVERRIDE`). See the **Permissions model** section under Architecture for the full failure chain.
 
 **Service-user + systemd model.** install.sh creates a system user (`portal` by default, override via `PORTAL_USER=...`), adds it to the `docker` group, and chowns `$INSTALL_DIR` to it. All subsequent operator actions run as that user — never as the invoking admin. Two systemd units (`portal-nginx.service`, `portal-traefik.service`, templated from `systemd/*.service` in the repo) handle start/stop/boot: enabled at install time so the portal comes back up on reboot. Docker's own `restart: unless-stopped` handles in-run crash recovery (container OOM, traefik panic, etc.) — that's a distinct concern from "service should start on boot" and systemd doesn't monitor containers after `ExecStart` returns. See the **Lifecycle ownership (split)** note in the Architecture section for the interaction details. If systemd isn't detected (edge case: Alpine containers, chroots), install.sh falls back to plain `docker compose up -d` with a warning.
 
