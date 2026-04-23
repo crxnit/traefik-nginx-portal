@@ -65,7 +65,10 @@ if [ "$(id -u)" -ne 0 ]; then
         rm -f "$_tmp"
         exit 1
     fi
-    exec sudo -E bash "$_tmp" "$@"
+    # Pass the temp path into the re-exec'd child so it can clean up on exit.
+    # `VAR=val` before the command in a sudo invocation is the portable way to
+    # inject a single env var (no reliance on sudoers `env_keep`).
+    exec sudo -E PORTAL_INSTALL_SELF_TMP="$_tmp" bash "$_tmp" "$@"
 fi
 
 # --- Constants -------------------------------------------------------------
@@ -213,6 +216,11 @@ prompt_with_default() {
         printf '%s: ' "$prompt_text"
     fi
     IFS= read -r _pwd_buf || _pwd_buf=""
+    # Trim leading/trailing whitespace — a stray trailing space in an install
+    # path (easy to paste) would otherwise propagate through chown/sed/systemd.
+    # Nested-expansion idiom: bash 3.2 compatible, no subshells.
+    _pwd_buf="${_pwd_buf#"${_pwd_buf%%[![:space:]]*}"}"
+    _pwd_buf="${_pwd_buf%"${_pwd_buf##*[![:space:]]}"}"
     [ -z "$_pwd_buf" ] && _pwd_buf="$default_value"
     printf -v "$var_name" '%s' "$_pwd_buf"
 }
@@ -249,6 +257,17 @@ check_install_dir_writable() {
         /*) ;;
         *) log_error "Install directory must be an absolute path: $dir"
            return 1 ;;
+    esac
+
+    # Refuse system-critical paths. Phase 4 does `chown -R portal:portal`
+    # on this directory — a typo here (e.g. "/etc") would destroy the host.
+    # Subpaths are fine (/etc/portal, /home/portal), only exact matches blocked.
+    case "$dir" in
+        /|/bin|/sbin|/usr|/etc|/boot|/home|/root|/var|/tmp|/dev|/proc|/sys|/lib|/lib32|/lib64|/libx32|/opt|/srv|/mnt|/media|/run)
+            log_error "Refusing to install into $dir — that would chown a system directory."
+            log_error "Pick a dedicated path like /srv/portal, /opt/portal, or \$HOME/portal."
+            return 1
+            ;;
     esac
 
     if [ -d "$dir" ]; then
@@ -388,6 +407,12 @@ handle_sigint() {
 
 handle_exit() {
     local code=$?
+    # Clean up the self-elevate temp file (curl-pipe branch only). Fires on
+    # both success and failure — the script is reproducible from HEAD, so
+    # leaving a stale copy in /tmp has no diagnostic value.
+    if [ -n "${PORTAL_INSTALL_SELF_TMP:-}" ] && [ -f "$PORTAL_INSTALL_SELF_TMP" ]; then
+        rm -f "$PORTAL_INSTALL_SELF_TMP" 2>/dev/null || true
+    fi
     # Only warn if phase 4 started AND actually created the install dir.
     # If `git clone` failed before creating the target (e.g., no write
     # permission on the parent), there's nothing to inspect.
@@ -680,6 +705,15 @@ phase3_confirmation() {
 
 phase4_wait_healthy() {
     local container="$1"
+    # Fail loudly if the container doesn't exist at all — otherwise the empty
+    # `docker inspect` output below gets swallowed by the "no HEALTHCHECK"
+    # branch and the operator only discovers the stack didn't come up at the
+    # HTTP probe, by which point the diagnostic trail is cold.
+    if ! docker inspect "$container" >/dev/null 2>&1; then
+        log_error "$container: container not found — the stack failed to start."
+        log_error "Check: $DC_CMD ps  /  journalctl -u portal-nginx -u portal-traefik -n 100"
+        exit 1
+    fi
     local elapsed=0
     local status=""
     while [ "$elapsed" -lt "$HEALTH_POLL_TIMEOUT" ]; do
@@ -829,10 +863,21 @@ phase4_install() {
     phase4_install_systemd_units
 
     # Install-time wrapper symlink so operators type `portal` from anywhere.
+    # Only overwrite if the target is missing or already points at our wrapper
+    # — refuse to stomp a pre-existing file/symlink belonging to some other
+    # tool (e.g., an unrelated binary called "portal" from a prior sysadmin).
     if [ -f "${INSTALL_DIR}/${PORTAL_WRAPPER}" ]; then
-        log_step "Installing wrapper symlink: $WRAPPER_SYMLINK -> ${INSTALL_DIR}/${PORTAL_WRAPPER}"
-        sudo ln -sf "${INSTALL_DIR}/${PORTAL_WRAPPER}" "$WRAPPER_SYMLINK" \
-            || log_warn "Could not create $WRAPPER_SYMLINK — operators will need to invoke the wrapper by full path."
+        local desired_target="${INSTALL_DIR}/${PORTAL_WRAPPER}"
+        log_step "Installing wrapper symlink: $WRAPPER_SYMLINK -> $desired_target"
+        if [ -L "$WRAPPER_SYMLINK" ] && [ "$(readlink "$WRAPPER_SYMLINK")" = "$desired_target" ]; then
+            log_info "$WRAPPER_SYMLINK already points to our wrapper — no-op."
+        elif [ -e "$WRAPPER_SYMLINK" ] || [ -L "$WRAPPER_SYMLINK" ]; then
+            log_warn "$WRAPPER_SYMLINK already exists and doesn't point at our wrapper — not overwriting."
+            log_warn "Remove it manually (sudo rm $WRAPPER_SYMLINK) and re-link if you want the 'portal' wrapper."
+        else
+            sudo ln -sf "$desired_target" "$WRAPPER_SYMLINK" \
+                || log_warn "Could not create $WRAPPER_SYMLINK — operators will need to invoke the wrapper by full path."
+        fi
     fi
 
     log_step "Running bootstrap.sh as $PORTAL_USER"
