@@ -746,13 +746,19 @@ phase5_verify() {
     if [ -n "$INITIAL_FQDN" ]; then
         local http_code https_code
         http_code="$(probe_http "http://${INITIAL_FQDN}/")"
-        if [ "$http_code" = "301" ]; then
-            log_info "HTTP probe $INITIAL_FQDN: 301 (redirect to HTTPS — expected)"
-            curl_rc="PASS"
-        else
-            log_warn "HTTP probe $INITIAL_FQDN: $http_code (expected 301)"
-            curl_rc="WARN"
-        fi
+        # Traefik's default HTTP→HTTPS redirect is 308 (Permanent Redirect,
+        # method-preserving); older configs / operators may use 301. Accept
+        # both as the expected response to a plain-HTTP request.
+        case "$http_code" in
+            301|308)
+                log_info "HTTP probe $INITIAL_FQDN: $http_code (redirect to HTTPS — expected)"
+                curl_rc="PASS"
+                ;;
+            *)
+                log_warn "HTTP probe $INITIAL_FQDN: $http_code (expected 301 or 308)"
+                curl_rc="WARN"
+                ;;
+        esac
         https_code="$(probe_http "https://${INITIAL_FQDN}/" -k)"
         case "$https_code" in
             200|301|302) log_info "HTTPS probe $INITIAL_FQDN: $https_code" ;;
