@@ -11,7 +11,7 @@
 # works for any user with sudo access — no need to remember `sudo bash`.
 #
 # Phases:
-#   0. Guard against existing portal installations
+#   0. Preflight: existing-install guard + port-80/443 conflict scan (ss/netstat/lsof)
 #   1. Dependency checks (Linux, docker, compose, git, openssl, sudo, useradd, ...);
 #      offers apt-install on missing Debian/Ubuntu packages
 #   2. Interactive prompts (install dir, ACME email, optional first FQDN, ...)
@@ -397,6 +397,53 @@ probe_http() {
         || printf '000'
 }
 
+# Scan for anything listening on TCP :80 or :443 (docker, another Traefik,
+# nginx on the host, Caddy, Apache — anything). Traefik binds both ports;
+# a conflict here makes phase 4 fail with an opaque "bind: address in use".
+# Better to catch it in phase 0 with a clear remediation.
+#
+# Prints one line per conflict to stdout as "<port>\t<raw-tool-line>".
+# Empty stdout + rc=0 means clean. rc=2 means no detection tool is
+# installed — we warn but don't block, since iproute2 is near-universal
+# and the conflict (if any) will still surface when Traefik tries to bind.
+#
+# Prefers `ss` (iproute2) → `netstat` (net-tools) → `lsof` in that order.
+# All three can run without root (just without process-name attribution),
+# but we're post-self-elevate so process names appear.
+_scan_port_conflicts() {
+    local tool="" raw="" port=""
+    if   command -v ss      >/dev/null 2>&1; then tool=ss
+    elif command -v netstat >/dev/null 2>&1; then tool=netstat
+    elif command -v lsof    >/dev/null 2>&1; then tool=lsof
+    else return 2
+    fi
+
+    for port in 80 443; do
+        raw=""
+        case "$tool" in
+            ss)
+                # -H no header, -l listening, -t tcp, -n numeric, -p process.
+                # "sport = :80" matches the listen port regardless of interface
+                # (covers 0.0.0.0:80, [::]:80, 127.0.0.1:80, etc.).
+                raw="$(ss -Hltnp "sport = :${port}" 2>/dev/null || true)"
+                ;;
+            netstat)
+                # netstat format varies; last :-separated field of column 4 is
+                # the listen port. Handles "0.0.0.0:80" and ":::80" alike.
+                raw="$(netstat -tlnp 2>/dev/null | awk -v p="$port" '
+                    /^tcp/ { la=$4; n=split(la, a, ":"); if (a[n]==p) print }' \
+                    || true)"
+                ;;
+            lsof)
+                raw="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null \
+                    | awk 'NR>1' || true)"
+                ;;
+        esac
+        [ -n "$raw" ] && printf '%s\n' "$raw" | sed "s/^/${port}\t/"
+    done
+    return 0
+}
+
 # --- Trap handlers ---------------------------------------------------------
 
 handle_sigint() {
@@ -433,12 +480,17 @@ handle_exit() {
     fi
 }
 
-# --- Phase 0: existing-config guard ----------------------------------------
+# --- Phase 0: preflight checks ---------------------------------------------
 
-phase0_existing_config_guard() {
-    log_step "Checking for existing portal installation"
+phase0_preflight_checks() {
+    log_step "Preflight checks"
+
+    # --- Existing-portal-install check -------------------------------------
+    # Narrow: spots a prior instance of *this* portal by its well-known
+    # container/network names and install layout. Exits 0 (benign) since
+    # re-running the installer on an already-installed host is usually a
+    # mistake, not a failure state.
     local found=""
-
     if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
         if docker ps --format '{{.Names}}' 2>/dev/null | grep -qwE "^(${NGINX_CONTAINER}|${TRAEFIK_CONTAINER})$"; then
             found="running container ($NGINX_CONTAINER or $TRAEFIK_CONTAINER)"
@@ -446,17 +498,42 @@ phase0_existing_config_guard() {
             found="docker network (traefik or edge)"
         fi
     fi
-
     if [ -z "$found" ] && [ -f "${INSTALL_DIR}/docker-compose.yml" ] && [ -d "${INSTALL_DIR}/bin" ]; then
         found="install directory ${INSTALL_DIR} (contains docker-compose.yml and bin/)"
     fi
-
     if [ -n "$found" ]; then
         log_warn "Existing portal installation detected: $found"
         log_warn "Aborting to avoid clobbering existing state."
         log_file_only "[phase 0] aborted: $found"
         syslog_event "Existing installation detected ($found) — aborting."
         exit 0
+    fi
+
+    # --- Port-conflict check -----------------------------------------------
+    # Broad: catches any webserver/proxy on :80 or :443 (Traefik needs both).
+    # Unlike the existing-install check, this one exits 1 (error) — there's
+    # something real in the way and the operator must intervene before the
+    # installer can make progress.
+    local port_out="" port_rc=0 line=""
+    port_out="$(_scan_port_conflicts)" || port_rc=$?
+    if [ "$port_rc" -eq 2 ]; then
+        log_warn "Cannot check :80 / :443 bindings — no ss/netstat/lsof installed."
+        log_warn "If either port is already bound, Traefik will fail to start in phase 4."
+    elif [ -n "$port_out" ]; then
+        log_error "Another process is already bound to port 80 and/or 443:"
+        # Each $port_out line is "<port>\t<tool-output>" — indent under error marker.
+        printf '%s\n' "$port_out" | while IFS= read -r line; do
+            [ -n "$line" ] && log_error "  $line"
+        done
+        log_error "Traefik needs both ports: TLS termination on :443, ACME HTTP-01 on :80."
+        log_error "Stop the conflicting service, then re-run this installer:"
+        log_error "  Docker container:  docker ps          →  docker stop <name>"
+        log_error "  systemd service:   systemctl stop nginx apache2 caddy httpd  (whichever)"
+        log_file_only "[phase 0] aborted: port 80/443 already bound"
+        syslog_event "Preflight failed: port 80 and/or 443 already bound."
+        exit 1
+    else
+        log_info "Ports 80/443 are free."
     fi
 }
 
@@ -1025,7 +1102,7 @@ main() {
     trap handle_exit EXIT
     setup_log
 
-    phase0_existing_config_guard
+    phase0_preflight_checks
     phase1_dependency_checks
     phase2_interactive_prompts
     phase3_confirmation
