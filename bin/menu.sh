@@ -113,14 +113,14 @@ header() { printf "\n${BOLD}${BLUE}━━━ %s ━━━${RESET}\n\n" "$*"; }
 
 pause() {
     echo
-    read -rp "Press Enter to continue..." _ </dev/tty
+    read -erp "Press Enter to continue..." _ </dev/tty
 }
 
 prompt_yes_no() {
     local prompt="$1" default="${2:-n}" reply
     local hint="[y/N]"
     [[ "$default" == "y" ]] && hint="[Y/n]"
-    read -rp "$prompt $hint " reply </dev/tty
+    read -erp "$prompt $hint " reply </dev/tty
     reply="${reply:-$default}"
     [[ "$reply" =~ ^[Yy]$ ]]
 }
@@ -128,7 +128,7 @@ prompt_yes_no() {
 prompt_fqdn() {
     local prompt="${1:-Enter FQDN}" fqdn
     while true; do
-        read -rp "$prompt (or Enter to cancel): " fqdn </dev/tty
+        read -erp "$prompt (or Enter to cancel): " fqdn </dev/tty
         [[ -z "$fqdn" ]] && return 1
         if validate_fqdn "$fqdn"; then
             printf '%s' "$fqdn"
@@ -228,7 +228,7 @@ action_list_sites() {
 action_list_sites_probe() {
     header "All sites (with reachability probe)"
     local probe_host
-    read -rp "Probe host [127.0.0.1]: " probe_host </dev/tty
+    read -erp "Probe host [127.0.0.1]: " probe_host </dev/tty
     if [[ -n "$probe_host" ]]; then
         "${SCRIPT_DIR}/list-sites.sh" --probe --probe-host "$probe_host"
     else
@@ -411,7 +411,7 @@ main() {
     while true; do
         show_menu
         local choice label="" fn="" lower
-        read -rp "Choice: " choice </dev/tty || { echo; exit 0; }
+        read -erp "Choice: " choice </dev/tty || { echo; exit 0; }
         # Portable lowercase — bash 3.2 (stock macOS) does not support ${var,,}.
         lower=$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]')
 
