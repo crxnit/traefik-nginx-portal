@@ -19,6 +19,16 @@ services:
       - ALL
     cap_add:
       - NET_BIND_SERVICE
+      # DAC_OVERRIDE lets the in-container process bypass filesystem DAC
+      # checks. Needed because Traefik runs as root in-container but with
+      # `cap_drop: ALL`, root loses its usual filesystem superpowers and
+      # must obey mode bits. acme.json and traefik/certs/default.key are
+      # created by bootstrap/ensure-default-tls at mode 600, owned by the
+      # portal service user on the host — without DAC_OVERRIDE the in-
+      # container UID can't read them ("permission denied" crash loop).
+      # Matches the pattern used by the nginx stack (same cap added there
+      # for the same reason).
+      - DAC_OVERRIDE
     read_only: true
     tmpfs:
       - /tmp
