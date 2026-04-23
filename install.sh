@@ -33,6 +33,14 @@
 
 set -euo pipefail
 
+# Normalize umask so git-cloned files end up 644, not 600. Hardened hosts
+# often set root's UMASK=077 in /etc/login.defs — with that, every file
+# this installer creates (including the static Traefik config) lands at
+# 600, which is unreadable by the non-root UID Traefik runs as inside the
+# container. Result: Traefik crash-loops on "open /etc/traefik/traefik.yml:
+# permission denied" before its healthcheck ever runs.
+umask 022
+
 # --- Self-elevate ----------------------------------------------------------
 # Runs before any other logic so the operator gets at most one terse line
 # of output ("Re-executing via sudo ...") before the real installer UI
@@ -86,7 +94,10 @@ SYSTEMD_UNIT_SRC="systemd"   # subpath inside the install dir
 SYSTEMD_UNITS="portal-nginx.service portal-traefik.service"
 WRAPPER_SYMLINK="/usr/local/bin/portal"
 MIN_DISK_KB=2097152      # 2 GB
-HEALTH_POLL_TIMEOUT=60
+# Traefik and nginx both use start_period + 3 retries at 30s interval, so
+# the full "starting → (un)healthy" transition window is ~95–100s. 60s was
+# too tight and produced false "starting" / "unhealthy" warnings in phase 4.
+HEALTH_POLL_TIMEOUT=120
 HEALTH_POLL_INTERVAL=3
 
 # --- Globals (initialized by main) -----------------------------------------
@@ -386,15 +397,20 @@ have_systemd() {
         && [ -d /run/systemd/system ]
 }
 
-# Probe a URL and return just its HTTP status code (or 000 on failure).
+# Probe a URL and return just its HTTP status code (or "000" on failure).
 # Second arg is an optional extra curl flag (e.g. -k for the HTTPS probe
 # while Traefik is still serving the self-signed default cert).
+#
+# curl's -w '%{http_code}' already prints "000" on DNS/connect/timeout
+# failure, so no || fallback is needed. A `|| printf '000'` here would
+# double-print: curl writes "000" to stdout *then* exits non-zero, and
+# the fallback would append a second "000" → callers would see "000000".
+# `|| true` just keeps set -e happy without emitting anything.
 probe_http() {
     local url="$1"
     local extra="${2:-}"
     # shellcheck disable=SC2086  # extra is empty or a single short flag
-    curl -s -o /dev/null -w '%{http_code}' --max-time 10 $extra "$url" \
-        || printf '000'
+    curl -s -o /dev/null -w '%{http_code}' --max-time 10 $extra "$url" || true
 }
 
 # Scan for anything listening on TCP :80 or :443 (docker, another Traefik,
@@ -853,11 +869,22 @@ phase4_ensure_service_user() {
 
 # chown $INSTALL_DIR to the service user. Everything under it — generated
 # configs, acme.json, default certs, per-site content — ends up owned by
-# `portal` going forward.
+# `portal` going forward. Also normalize modes (755 dirs / 755 executables
+# / 644 everything else) so the non-root UID Traefik uses inside the
+# container can read its RO-mounted static config. Defense-in-depth against
+# the top-of-file `umask 022`: if anything later in the pipeline lands a
+# file at 600, this pass relaxes it to 644 before the containers start.
+# acme.json and default.key (created after this by bootstrap) set their
+# own 600 modes explicitly and don't exist yet to be widened here.
 phase4_chown_install_dir() {
-    log_step "Setting ownership: $PORTAL_USER:$PORTAL_USER -> $INSTALL_DIR"
+    log_step "Setting ownership + modes: $PORTAL_USER:$PORTAL_USER -> $INSTALL_DIR"
     sudo chown -R "$PORTAL_USER:$PORTAL_USER" "$INSTALL_DIR" \
         || { log_error "chown failed."; exit 1; }
+    # `u=rwX,go=rX` — capital X means "execute only on dirs or files that
+    # already have x for at least one class", so bin/*.sh executables
+    # stay 755 while data files become 644. No need to enumerate.
+    sudo chmod -R u=rwX,go=rX "$INSTALL_DIR" \
+        || { log_error "chmod normalization failed."; exit 1; }
 }
 
 # Install the two systemd units (nginx + traefik) by substituting our
