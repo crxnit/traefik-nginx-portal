@@ -11,11 +11,14 @@
 #
 # Usage:
 #   ./provision-site.sh <fqdn> [--spa] [--no-reload] [--traefik-dir <path>]
+#                              [--oauth] [--oauth-public=/a,/b,...]
 #
 # Examples:
 #   ./provision-site.sh myapp.example.com
 #   ./provision-site.sh app.example.com --spa
 #   ./provision-site.sh landing.example.com --traefik-dir /opt/traefik/dynamic
+#   ./provision-site.sh api.example.com --oauth
+#   ./provision-site.sh api.example.com --oauth --oauth-public=/healthz,/webhooks/
 
 set -euo pipefail
 
@@ -38,16 +41,20 @@ NGINX_SERVICE_NAME="$PORTAL_NGINX_SERVICE_NAME"  # from _lib.sh; must match _sha
 FQDN=""
 SPA_MODE=false
 DO_RELOAD=true
+OAUTH_MODE=false
+OAUTH_PUBLIC_PATHS=""
 
 usage() {
     cat <<EOF
 Usage: $0 <fqdn> [options]
 
 Options:
-  --spa               Configure the site with SPA fallback (try_files ... /index.html)
-  --no-reload         Skip nginx config test and reload
-  --traefik-dir DIR   Override Traefik dynamic config directory
-  -h, --help          Show this help
+  --spa                      Configure the site with SPA fallback (try_files ... /index.html)
+  --no-reload                Skip nginx config test and reload
+  --traefik-dir DIR          Override Traefik dynamic config directory
+  --oauth                    Protect the whole site with OAuth (Google Workspace)
+  --oauth-public=/a,/b,...   Comma-separated PathPrefixes exempt from OAuth (implies --oauth)
+  -h, --help                 Show this help
 
 Environment variables:
   TRAEFIK_DYNAMIC_DIR  Alternative way to set Traefik dynamic dir (default: ./traefik/dynamic)
@@ -56,6 +63,9 @@ Notes:
   FQDN must be lowercase, DNS-legal, and contain at least one dot. Wildcards
   (*.example.com) and IDN/punycode labels (xn--*) are not supported — encode
   them manually and bypass validation if you need them.
+
+  --oauth requires OAuth to be configured in \$PORTAL_DIR/.env — see install.sh
+  output or CLAUDE.md "OAuth protection" section for setup.
 EOF
     exit 0
 }
@@ -66,6 +76,10 @@ while [[ $# -gt 0 ]]; do
         --spa)              SPA_MODE=true; shift ;;
         --no-reload)        DO_RELOAD=false; shift ;;
         --traefik-dir)      TRAEFIK_DYNAMIC_DIR="$2"; shift 2 ;;
+        --oauth)            OAUTH_MODE=true; shift ;;
+        # Accept both `--oauth-public=VAL` (preferred) and `--oauth-public VAL`
+        --oauth-public=*)   OAUTH_MODE=true; OAUTH_PUBLIC_PATHS="${1#*=}"; shift ;;
+        --oauth-public)     OAUTH_MODE=true; OAUTH_PUBLIC_PATHS="$2"; shift 2 ;;
         --*)                die "Unknown option: $1" ;;
         *)
             if [[ -z "$FQDN" ]]; then
@@ -83,6 +97,28 @@ done
 # --- Validation ------------------------------------------------------------
 
 validate_fqdn "$FQDN" || die "Invalid FQDN: '$FQDN'. Must be lowercase, contain at least one dot, and follow DNS naming rules."
+
+# --- OAuth public-path validation ------------------------------------------
+# Each prefix must start with "/" and must not contain backticks (the
+# Traefik rule syntax uses them to delimit values, and we don't want
+# operator input breaking out of the quoted value into arbitrary rule
+# syntax). Rejected early so a typo here fails before we write any files.
+
+OAUTH_PUBLIC_PATHS_ARRAY=()
+if [[ -n "$OAUTH_PUBLIC_PATHS" ]]; then
+    $OAUTH_MODE || die "--oauth-public requires --oauth"
+    IFS=',' read -r -a OAUTH_PUBLIC_PATHS_ARRAY <<< "$OAUTH_PUBLIC_PATHS"
+    for _path in "${OAUTH_PUBLIC_PATHS_ARRAY[@]}"; do
+        [[ -z "$_path" ]] && die "Empty entry in --oauth-public list"
+        case "$_path" in
+            /*) ;;
+            *) die "Public path must start with '/': '$_path'" ;;
+        esac
+        case "$_path" in
+            *'`'*) die "Public path cannot contain backticks: '$_path'" ;;
+        esac
+    done
+fi
 
 acquire_portal_lock "$PORTAL_DIR"
 
@@ -222,19 +258,63 @@ if [[ -n "$TRAEFIK_FILE" ]]; then
     # Router name: replace dots with hyphens for a valid Traefik identifier
     ROUTER_NAME="${FQDN//./-}"
 
-    write_atomic "$TRAEFIK_FILE" <<EOF
-# ${FQDN}
+    # Middleware list for the primary/protected router. OAuth is appended
+    # (not prepended) so rate-limit runs before auth — brute-force against
+    # the forward-auth endpoint is capped by our rate limiter.
+    MIDDLEWARES="        - security-headers@file
+        - rate-limit@file"
+    if $OAUTH_MODE; then
+        MIDDLEWARES="${MIDDLEWARES}
+        - oauth-google-forward-auth@file"
+    fi
 
-http:
-  routers:
-    ${ROUTER_NAME}:
-      rule: "Host(\`${FQDN}\`)"
+    # Dual-router mode: one high-priority "public" router for OAuth-exempt
+    # PathPrefixes, one low-priority catchall with OAuth. Priorities are
+    # explicit so the precedence is unambiguous (Traefik's default rule-
+    # length tiebreak would likely pick the right one, but explicit > lucky).
+    PUBLIC_ROUTER=""
+    MAIN_PRIORITY_LINE=""
+    if [[ ${#OAUTH_PUBLIC_PATHS_ARRAY[@]} -gt 0 ]]; then
+        # Build the PathPrefix OR-chain: PathPrefix(`/a`) || PathPrefix(`/b`)
+        _path_rule=""
+        for p in "${OAUTH_PUBLIC_PATHS_ARRAY[@]}"; do
+            if [[ -z "$_path_rule" ]]; then
+                _path_rule="PathPrefix(\`${p}\`)"
+            else
+                _path_rule="${_path_rule} || PathPrefix(\`${p}\`)"
+            fi
+        done
+        # Wrap in parens when >1 prefix, so && binds tighter than ||
+        [[ ${#OAUTH_PUBLIC_PATHS_ARRAY[@]} -gt 1 ]] && _path_rule="(${_path_rule})"
+
+        PUBLIC_ROUTER="    ${ROUTER_NAME}-public:
+      rule: \"Host(\`${FQDN}\`) && ${_path_rule}\"
+      priority: 100
       entrypoints:
         - websecure
       service: ${NGINX_SERVICE_NAME}
       middlewares:
         - security-headers@file
         - rate-limit@file
+      tls:
+        certResolver: ${CERT_RESOLVER}
+"
+        MAIN_PRIORITY_LINE="      priority: 10
+"
+    fi
+
+    write_atomic "$TRAEFIK_FILE" <<EOF
+# ${FQDN}
+
+http:
+  routers:
+${PUBLIC_ROUTER}    ${ROUTER_NAME}:
+      rule: "Host(\`${FQDN}\`)"
+${MAIN_PRIORITY_LINE}      entrypoints:
+        - websecure
+      service: ${NGINX_SERVICE_NAME}
+      middlewares:
+${MIDDLEWARES}
       tls:
         certResolver: ${CERT_RESOLVER}
 EOF
@@ -269,3 +349,18 @@ echo "Next steps:"
 echo "  - Deploy content to: $SITE_DIR"
 echo "  - Verify DNS points $FQDN to this server"
 echo "  - Test: curl -I https://$FQDN"
+if $OAUTH_MODE; then
+    echo
+    echo "  OAuth is enabled for this site. In the Google Cloud Console"
+    echo "  (console.cloud.google.com → Credentials → OAuth 2.0 Client),"
+    echo "  add this redirect URI to the client configured in .env:"
+    echo
+    echo "      https://${FQDN}/_oauth"
+    echo
+    if [[ ${#OAUTH_PUBLIC_PATHS_ARRAY[@]} -gt 0 ]]; then
+        echo "  Public (unauthenticated) path prefixes:"
+        for p in "${OAUTH_PUBLIC_PATHS_ARRAY[@]}"; do
+            echo "      $p"
+        done
+    fi
+fi

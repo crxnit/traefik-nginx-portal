@@ -250,6 +250,15 @@ action_provision_site() {
     if prompt_yes_no "SPA mode (try_files fallback to /index.html)?"; then
         args+=(--spa)
     fi
+    if prompt_yes_no "Protect with OAuth (Google Workspace)?"; then
+        args+=(--oauth)
+        # Optional public-path allowlist. Blank input = whole-site auth.
+        local public
+        read -r -e -p "Public (unauthenticated) path prefixes, comma-separated (blank = none): " public
+        if [[ -n "$public" ]]; then
+            args+=("--oauth-public=${public}")
+        fi
+    fi
     if ! prompt_yes_no "Test + reload nginx after writing files?" y; then
         args+=(--no-reload)
     fi
@@ -339,6 +348,7 @@ Stacks:
 Sites:
   ./bin/list-sites.sh [--probe] [--drift-only] [--format json]
   ./bin/provision-site.sh <fqdn> [--spa] [--no-reload]
+  ./bin/provision-site.sh <fqdn> --oauth [--oauth-public=/healthz,/webhooks/]
   ./bin/deprovision-site.sh <fqdn> [--dry-run] [--yes] [--keep-content]
   ./bin/reload-nginx.sh
 

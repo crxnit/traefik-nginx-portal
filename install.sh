@@ -115,6 +115,14 @@ CLONE_STARTED=0
 INSTALL_LOG=""
 SYSTEMD_AVAILABLE=0
 
+# OAuth globals: empty/off unless operator opts in during phase 2.
+OAUTH_ENABLED="no"
+OAUTH_CLIENT_ID=""
+OAUTH_CLIENT_SECRET=""
+OAUTH_DOMAIN=""
+OAUTH_COOKIE_SECRET=""
+OAUTH_PROTECT_INITIAL="no"  # attach --oauth to the first provision-site call
+
 # --- Colors ----------------------------------------------------------------
 
 setup_colors() {
@@ -234,6 +242,20 @@ prompt_with_default() {
     _pwd_buf="${_pwd_buf%"${_pwd_buf##*[![:space:]]}"}"
     [ -z "$_pwd_buf" ] && _pwd_buf="$default_value"
     printf -v "$var_name" '%s' "$_pwd_buf"
+}
+
+# prompt_secret VAR_NAME "prompt text"
+# Same contract as prompt_with_default but with echo disabled — use for
+# anything that shouldn't land in the scrollback (OAuth client secret, etc.).
+# Emits a trailing newline manually because `read -s` swallows the user's.
+prompt_secret() {
+    local var_name="$1"
+    local prompt_text="$2"
+    local _ps_buf
+    printf '%s: ' "$prompt_text"
+    IFS= read -rs _ps_buf || _ps_buf=""
+    echo
+    printf -v "$var_name" '%s' "$_ps_buf"
 }
 
 # prompt_yes_no VAR_NAME "prompt text" "yes|no"
@@ -763,6 +785,66 @@ phase2_interactive_prompts() {
 
     prompt_with_default NGINX_CONTAINER   "nginx container name"   "$NGINX_CONTAINER"
     prompt_with_default TRAEFIK_CONTAINER "Traefik container name" "$TRAEFIK_CONTAINER"
+
+    phase2_oauth_prompts
+}
+
+# OAuth prompts are optional and segregated — can be skipped entirely
+# (default) without blocking the install. Operators who want to enable
+# OAuth later can edit $INSTALL_DIR/.env and run `sudo systemctl restart
+# portal-traefik`.
+phase2_oauth_prompts() {
+    echo
+    log_info "OAuth protection (optional)"
+    log_info "  Protects individual sites behind Google Workspace sign-in."
+    log_info "  Requires a Google OAuth client (from console.cloud.google.com)"
+    log_info "  and an allowed email domain. Skip to leave all sites public;"
+    log_info "  can be enabled later by editing \$INSTALL_DIR/.env and running"
+    log_info "  'sudo systemctl restart portal-traefik'."
+    prompt_yes_no OAUTH_ENABLED "Configure OAuth now?" "no"
+    [ "$OAUTH_ENABLED" = "yes" ] || return 0
+
+    # Client ID is not a secret; use the echoing prompt so the operator can
+    # visually confirm they pasted the right value.
+    while :; do
+        prompt_with_default OAUTH_CLIENT_ID "Google OAuth client ID" ""
+        [ -n "$OAUTH_CLIENT_ID" ] && break
+        printf '  Client ID is required.\n'
+    done
+
+    # Secret: use the hidden-echo prompt so it doesn't land in scrollback.
+    while :; do
+        prompt_secret OAUTH_CLIENT_SECRET "Google OAuth client secret (input hidden)"
+        [ -n "$OAUTH_CLIENT_SECRET" ] && break
+        printf '  Client secret is required.\n'
+    done
+
+    # Allowed email domain(s). Basic sanity check — we reject whitespace
+    # and slashes; traefik-forward-auth itself validates at startup.
+    while :; do
+        prompt_with_default OAUTH_DOMAIN "Allowed email domain (comma-separated for multiple)" ""
+        if [ -z "$OAUTH_DOMAIN" ]; then
+            printf '  At least one domain is required.\n'
+            continue
+        fi
+        case "$OAUTH_DOMAIN" in
+            *[[:space:]/]*) printf '  Invalid character in domain list.\n'; continue ;;
+        esac
+        break
+    done
+
+    # Cookie-signing secret: 32 random bytes, base64-encoded. Generated
+    # here (not prompted) so operators can't accidentally paste a weak
+    # value. openssl is in the phase-1 dependency check.
+    OAUTH_COOKIE_SECRET="$(openssl rand -base64 32)"
+    log_info "Generated 32-byte cookie-signing key (not echoed)"
+
+    # If they asked for an initial site, offer to protect it immediately.
+    # Default yes: if they bothered configuring OAuth AND provisioning a
+    # site, odds are they want that site protected.
+    if [ -n "$INITIAL_FQDN" ]; then
+        prompt_yes_no OAUTH_PROTECT_INITIAL "Protect '$INITIAL_FQDN' with OAuth?" "yes"
+    fi
 }
 
 # --- Phase 3: confirmation -------------------------------------------------
@@ -776,6 +858,12 @@ phase3_confirmation() {
     [ -n "$INITIAL_FQDN" ] && printf '  %-25s %s\n' "SPA mode:" "$SPA_MODE"
     printf '  %-25s %s\n' "nginx container:"      "$NGINX_CONTAINER"
     printf '  %-25s %s\n' "Traefik container:"    "$TRAEFIK_CONTAINER"
+    if [ "$OAUTH_ENABLED" = "yes" ]; then
+        printf '  %-25s %s\n' "OAuth:"            "enabled (Google, domain=$OAUTH_DOMAIN)"
+        [ -n "$INITIAL_FQDN" ] && printf '  %-25s %s\n' "Protect initial site:" "$OAUTH_PROTECT_INITIAL"
+    else
+        printf '  %-25s %s\n' "OAuth:"            "not configured (can be enabled later via .env)"
+    fi
     if [ "$SYSTEMD_AVAILABLE" -eq 1 ]; then
         printf '  %-25s %s\n' "Lifecycle:"        "systemd (portal-nginx.service, portal-traefik.service)"
     else
@@ -887,6 +975,44 @@ phase4_chown_install_dir() {
         || { log_error "chmod normalization failed."; exit 1; }
 }
 
+# Write $INSTALL_DIR/.env with compose-profile + OAuth values collected
+# in phase 2. Runs *after* phase4_chown_install_dir so the broad
+# `chmod -R u=rwX,go=rX` doesn't widen this secrets file back to 644.
+# Empty OAuth values land as empty strings; the traefik-forward-auth
+# sidecar is gated behind COMPOSE_PROFILES=oauth so empty env doesn't
+# matter when OAuth isn't active.
+phase4_write_env_file() {
+    log_step "Writing compose env: $INSTALL_DIR/.env"
+    local env_file="${INSTALL_DIR}/.env"
+    local compose_profiles=""
+    [ "$OAUTH_ENABLED" = "yes" ] && compose_profiles="oauth"
+
+    # Heredoc directly (no write_atomic — _lib.sh isn't sourced from install.sh).
+    # Root owns the file at creation; chown below hands it to portal. Explicit
+    # chmod 600 enforces secrets protection regardless of umask.
+    cat > "$env_file" <<EOF
+# Portal compose env — written by install.sh, mode 600. Do NOT commit.
+# Edit and run 'sudo systemctl restart portal-traefik' to apply changes.
+
+# Compose profiles to activate. "oauth" starts the traefik-forward-auth-google
+# sidecar. Comma-separate multiple profiles.
+COMPOSE_PROFILES=${compose_profiles}
+
+# --- OAuth (Google Workspace) ---
+# Populated when OAuth is enabled during install. Leave values empty when
+# not using OAuth; COMPOSE_PROFILES above gates the sidecar regardless.
+OAUTH_PROVIDERS_GOOGLE_CLIENT_ID=${OAUTH_CLIENT_ID}
+OAUTH_PROVIDERS_GOOGLE_CLIENT_SECRET=${OAUTH_CLIENT_SECRET}
+OAUTH_SECRET=${OAUTH_COOKIE_SECRET}
+OAUTH_DOMAIN=${OAUTH_DOMAIN}
+EOF
+    sudo chown "$PORTAL_USER:$PORTAL_USER" "$env_file" \
+        || { log_error "chown $env_file failed."; exit 1; }
+    sudo chmod 600 "$env_file" \
+        || { log_error "chmod 600 $env_file failed."; exit 1; }
+    log_info "Wrote $env_file (mode 600, owner $PORTAL_USER)"
+}
+
 # Install the two systemd units (nginx + traefik) by substituting our
 # @PORTAL_DIR@ / @PORTAL_USER@ / @DC_CMD@ placeholders into the templates
 # shipped under systemd/ and dropping the result into /etc/systemd/system/.
@@ -964,6 +1090,7 @@ phase4_install() {
 
     phase4_ensure_service_user
     phase4_chown_install_dir
+    phase4_write_env_file
     phase4_install_systemd_units
 
     # Install-time wrapper symlink so operators type `portal` from anywhere.
@@ -1012,10 +1139,11 @@ phase4_install() {
     if [ -n "$INITIAL_FQDN" ]; then
         log_step "Provisioning initial site: $INITIAL_FQDN"
         syslog_event "Provisioning $INITIAL_FQDN"
-        local spa_flag=""
+        local spa_flag="" oauth_flag=""
         [ "$SPA_MODE" = "yes" ] && spa_flag="--spa"
-        # shellcheck disable=SC2086  # spa_flag is empty or '--spa'; must not be quoted
-        run_as_portal "${INSTALL_DIR}/${PROVISION_SCRIPT}" "$INITIAL_FQDN" $spa_flag
+        [ "$OAUTH_PROTECT_INITIAL" = "yes" ] && oauth_flag="--oauth"
+        # shellcheck disable=SC2086  # each flag var is empty or a single word; must not be quoted
+        run_as_portal "${INSTALL_DIR}/${PROVISION_SCRIPT}" "$INITIAL_FQDN" $spa_flag $oauth_flag
     fi
 }
 
@@ -1084,6 +1212,8 @@ phase6_final_log() {
             printf 'initial_fqdn:    %s\n' "${INITIAL_FQDN:-<none>}"
             printf 'nginx_container: %s\n' "$NGINX_CONTAINER"
             printf 'traefik_container: %s\n' "$TRAEFIK_CONTAINER"
+            printf 'oauth_enabled:   %s\n' "$OAUTH_ENABLED"
+            [ "$OAUTH_ENABLED" = "yes" ] && printf 'oauth_domain:    %s\n' "$OAUTH_DOMAIN"
         } >> "$INSTALL_LOG"
     fi
 
@@ -1107,6 +1237,28 @@ Point DNS for your site(s) at this host and Let's Encrypt will issue certs
 on the first HTTPS request. Both stacks will restart automatically on
 reboot (enabled at the systemd level).
 EOF
+
+    if [ "$OAUTH_ENABLED" = "yes" ]; then
+        cat <<EOF
+
+${BOLD}OAuth is configured (Google, domain=$OAUTH_DOMAIN).${RESET}
+  - The traefik-forward-auth-google sidecar is started (COMPOSE_PROFILES=oauth in .env).
+  - Protect additional sites at provision time:  portal provision-site <fqdn> --oauth
+  - Public paths exempt from auth:               --oauth-public=/healthz,/webhooks/
+  - In the Google Cloud Console, register this redirect URI per protected site:
+      https://<fqdn>/_oauth
+  - Credentials live at $INSTALL_DIR/.env (mode 600). Edit + 'systemctl restart
+    portal-traefik' to rotate keys or change the allowed domain.
+EOF
+    else
+        cat <<EOF
+
+OAuth is not configured. To enable later:
+  sudo -u $PORTAL_USER vim $INSTALL_DIR/.env  # fill in OAUTH_* values and set COMPOSE_PROFILES=oauth
+  sudo systemctl restart portal-traefik
+  portal provision-site <fqdn> --oauth        # to protect a specific site
+EOF
+    fi
 
     # Flush the tee subshell before main returns.
     #

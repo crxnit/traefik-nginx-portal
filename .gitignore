@@ -2,6 +2,10 @@
 traefik/acme.json
 traefik/certs/
 
+# Compose env + OAuth credentials (Google client ID/secret, cookie-signing key,
+# whitelist domain, COMPOSE_PROFILES). Written by install.sh at mode 600.
+.env
+
 # Generated per-site Traefik dynamic files; keep underscore-prefixed shared files
 traefik/dynamic/*.yml
 traefik/dynamic/*.yaml

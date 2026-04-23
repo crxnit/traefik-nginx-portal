@@ -47,6 +47,64 @@ services:
     # explicit stop, which `unless-stopped` respects, so there's no race.
     restart: unless-stopped
 
+  # OAuth sidecar (Google Workspace). Optional: only starts when .env sets
+  # COMPOSE_PROFILES=oauth (set by install.sh when the operator opts into
+  # OAuth during install, or by editing .env later + systemctl restart).
+  # Sites opt into protection at provision time via provision-site.sh
+  # --oauth / --oauth-public; the dynamic YAML for that site attaches the
+  # oauth-google-forward-auth@file middleware (see traefik/dynamic/_oauth.yml).
+  #
+  # The image is built + published by a separate fork at
+  # github.com/crxnit/traefik-forward-auth after a security triage. Until
+  # that fork produces a signed release, the tag is a placeholder that
+  # deliberately won't pull — prevents accidentally shipping unreviewed
+  # upstream code to prod.
+  traefik-forward-auth-google:
+    image: ghcr.io/crxnit/traefik-forward-auth:audit-pending
+    container_name: traefik-forward-auth-google
+    profiles:
+      - oauth
+    networks:
+      - traefik
+    environment:
+      # Values come from .env — install.sh writes it with mode 600. If any
+      # required var is empty at container start, traefik-forward-auth
+      # will log the error and exit; compose-level `:?` validation is
+      # deliberately omitted because `docker compose config` evaluates
+      # the whole file regardless of active profile, and would error on
+      # unrelated commands (list-sites, etc.) when OAuth isn't configured.
+      PROVIDERS_GOOGLE_CLIENT_ID: "${OAUTH_PROVIDERS_GOOGLE_CLIENT_ID:-}"
+      PROVIDERS_GOOGLE_CLIENT_SECRET: "${OAUTH_PROVIDERS_GOOGLE_CLIENT_SECRET:-}"
+      # 32-byte random cookie-signing key (install.sh generates via openssl).
+      SECRET: "${OAUTH_SECRET:-}"
+      # Comma-separated list of email domains allowed to authenticate.
+      # Example: "jjocllc.com" or "jjocllc.com,partner.com".
+      DOMAIN: "${OAUTH_DOMAIN:-}"
+      # Traefik terminates TLS, so the cookie travels over HTTPS to the
+      # browser. The sidecar sees plain HTTP internally (from Traefik
+      # over the `traefik` docker network) but still sets Secure on the
+      # browser-facing cookie.
+      INSECURE_COOKIE: "false"
+      LOG_LEVEL: "info"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # No cap_add: sidecar binds no privileged ports (internal :4181 only)
+    # and reads no mounted files — pure stdin/stdout + network. The strict
+    # drop-all here is a real property, not a mirror of traefik's needs.
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 128m
+    cpus: 0.25
+    # Healthcheck deliberately omitted — upstream traefik-forward-auth
+    # ships a scratch-based image with no shell or wget/curl, so the
+    # `test:` styles that rely on an in-container command don't work.
+    # The fork will add a health endpoint + a distroless base that
+    # includes a busybox-style wget, at which point this can be wired.
+    restart: unless-stopped
+
 networks:
   traefik:
     name: traefik

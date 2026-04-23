@@ -1,0 +1,26 @@
+# OAuth (Google Workspace) forward-auth middleware.
+#
+# Points at the traefik-forward-auth-google sidecar defined in the top-level
+# docker-compose.yml under profile "oauth". The sidecar only runs if .env
+# sets COMPOSE_PROFILES=oauth; if it's not running, routers that reference
+# this middleware will 502/503 (expected — don't attach it until OAuth is
+# configured).
+#
+# Naming: specific ("google") rather than generic ("forward-auth") so a
+# second provider can be added later as a sibling file + sibling sidecar
+# (e.g. _oauth-microsoft.yml + traefik-forward-auth-microsoft) without
+# renaming anything.
+#
+# Attached by provision-site.sh --oauth via the middleware chain in the
+# per-site router YAML.
+
+http:
+  middlewares:
+    oauth-google-forward-auth:
+      forwardAuth:
+        address: "http://traefik-forward-auth-google:4181"
+        trustForwardHeader: true
+        # Headers the sidecar sets on successful auth, forwarded to the
+        # backend so apps can read the authenticated identity.
+        authResponseHeaders:
+          - X-Forwarded-User
