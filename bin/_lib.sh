@@ -15,6 +15,19 @@
 # Scripts are free to add their own specialized helpers on top
 # (e.g. log_step in bootstrap, log_dry in deprovision).
 
+# --- umask -----------------------------------------------------------------
+# Force umask 022 for every script that sources this lib. Hardened hosts
+# often default the portal service user's login umask to 007 or 027 (via
+# /etc/login.defs / pam_umask), which produces 660 files and 770 dirs —
+# unreadable by the in-container nginx *worker* process, which runs as a
+# different UID than the host owner and doesn't get DAC_OVERRIDE (that
+# cap is only effective for UID 0; workers drop to a non-root user and
+# lose it). Result: per-site content 403s on every external request.
+#
+# Explicit `chmod` calls (acme.json, default.key) override this anyway,
+# so setting umask 022 here doesn't weaken any secret-file protection.
+umask 022
+
 # --- Portal root resolution ------------------------------------------------
 # Every script lives in $PORTAL_DIR/bin/. This file's directory is bin/,
 # so PORTAL_DIR is one level up. Callers reference $PORTAL_DIR for any
