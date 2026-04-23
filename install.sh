@@ -5,9 +5,15 @@
 # Intended flow:
 #   curl -sSL https://raw.githubusercontent.com/crxnit/traefik-nginx-portal/main/install.sh | bash
 #
+# The installer self-elevates via sudo if not already root (re-downloading
+# to a temp file for the curl-pipe case), and offers to install any missing
+# dependencies via apt on Debian/Ubuntu. So the `curl | bash` form above
+# works for any user with sudo access — no need to remember `sudo bash`.
+#
 # Phases:
 #   0. Guard against existing portal installations
-#   1. Dependency checks (Linux, docker, compose, git, openssl, sudo, useradd, ...)
+#   1. Dependency checks (Linux, docker, compose, git, openssl, sudo, useradd, ...);
+#      offers apt-install on missing Debian/Ubuntu packages
 #   2. Interactive prompts (install dir, ACME email, optional first FQDN, ...)
 #   3. Summary + confirmation
 #   4. Install:
@@ -26,6 +32,41 @@
 # Bash 3.2 compatible. shellcheck --severity=warning clean.
 
 set -euo pipefail
+
+# --- Self-elevate ----------------------------------------------------------
+# Runs before any other logic so the operator gets at most one terse line
+# of output ("Re-executing via sudo ...") before the real installer UI
+# begins as root. The installer needs root for useradd, systemd unit
+# installation, /usr/local/bin symlink, and (on most distros) docker
+# socket access before the operator has been added to the docker group.
+
+INSTALLER_URL="https://raw.githubusercontent.com/crxnit/traefik-nginx-portal/main/install.sh"
+
+if [ "$(id -u)" -ne 0 ]; then
+    if ! command -v sudo >/dev/null 2>&1; then
+        printf '[ERROR] Installer requires root privileges and sudo is not installed.\n' >&2
+        printf '[ERROR] Re-run as root (e.g., via `su -`) or install sudo first.\n' >&2
+        exit 1
+    fi
+    printf '[INFO]  Not running as root — re-executing via sudo (you may be prompted for your password).\n'
+
+    # If we're running from a real file, sudo can exec that file directly.
+    # If we're curl-piped (BASH_SOURCE[0] is the literal "bash" / "main" /
+    # empty and there's no file to exec), re-download to a temp file so
+    # sudo has something concrete to run. The temp file is owned by the
+    # invoking user, mode 0600 from mktemp — safe on a shared host.
+    _src="${BASH_SOURCE[0]:-}"
+    if [ -n "$_src" ] && [ -f "$_src" ]; then
+        exec sudo -E bash "$_src" "$@"
+    fi
+    _tmp="$(mktemp -t portal-install.XXXXXX)"
+    if ! curl -fsSL "$INSTALLER_URL" -o "$_tmp"; then
+        printf '[ERROR] Failed to re-download installer from %s\n' "$INSTALLER_URL" >&2
+        rm -f "$_tmp"
+        exit 1
+    fi
+    exec sudo -E bash "$_tmp" "$@"
+fi
 
 # --- Constants -------------------------------------------------------------
 
@@ -126,6 +167,21 @@ is_curl_pipe_mode() {
         bash|-bash|/bin/bash|/usr/bin/bash|sh|/bin/sh) return 0 ;;
     esac
     return 1
+}
+
+# Idempotent: reopen stdin from the controlling TTY if stdin isn't already
+# interactive. Safe to call multiple times. Used by phase 1 (deps-install
+# offer) and phase 2 (normal prompt flow). After self-elevation via the
+# temp-file re-exec above, bash is reading the *script* from the temp file,
+# so redirecting stdin doesn't affect script parsing.
+ensure_tty_stdin() {
+    [ -t 0 ] && return 0
+    if [ -r /dev/tty ]; then
+        exec < /dev/tty
+    else
+        log_error "Cannot read from a TTY; stdin is not interactive and /dev/tty is unavailable."
+        exit 1
+    fi
 }
 
 validate_email() {
@@ -381,9 +437,123 @@ phase0_existing_config_guard() {
 
 # --- Phase 1: dependency checks --------------------------------------------
 
+# Pure check: returns a space-separated list of missing/unusable dependency
+# tokens via stdout. Empty output == everything is fine. Called from phase 1
+# twice if the operator accepts the auto-install offer (once to build the
+# initial list, once to confirm nothing was left out).
+_detect_missing_deps() {
+    local missing=""
+    if ! command -v docker >/dev/null 2>&1; then
+        missing="${missing} docker"
+    elif ! docker info >/dev/null 2>&1; then
+        missing="${missing} docker-daemon"
+    fi
+    [ -n "$(docker_compose_cmd)" ] || missing="${missing} docker-compose"
+    command -v git     >/dev/null 2>&1 || missing="${missing} git"
+    command -v openssl >/dev/null 2>&1 || missing="${missing} openssl"
+    command -v useradd >/dev/null 2>&1 || missing="${missing} useradd"
+    command -v usermod >/dev/null 2>&1 || missing="${missing} usermod"
+    command -v getent  >/dev/null 2>&1 || missing="${missing} getent"
+    command -v sudo    >/dev/null 2>&1 || missing="${missing} sudo"
+    printf '%s' "${missing# }"
+}
+
+# Install Docker CE + the compose v2 plugin from docker.com's official repo.
+# Ubuntu/Debian only. Returns 0 on success.
+_install_docker_ce() {
+    local distro codename keyring repo_file
+    distro="$(. /etc/os-release && printf '%s' "$ID")"
+    codename="$(. /etc/os-release && printf '%s' "${VERSION_CODENAME:-}")"
+    case "$distro" in
+        ubuntu|debian) ;;
+        *) log_error "Docker auto-install only supports Ubuntu/Debian (detected: $distro)."; return 1 ;;
+    esac
+    if [ -z "$codename" ]; then
+        log_error "Could not read VERSION_CODENAME from /etc/os-release."
+        return 1
+    fi
+
+    log_info "Installing Docker CE from docker.com's apt repo ($distro $codename)..."
+    apt-get install -y ca-certificates curl gnupg \
+        || { log_error "Installing docker prerequisites failed."; return 1; }
+    install -m 0755 -d /etc/apt/keyrings
+
+    keyring="/etc/apt/keyrings/docker.gpg"
+    curl -fsSL "https://download.docker.com/linux/${distro}/gpg" \
+        | gpg --dearmor -o "$keyring" \
+        || { log_error "Failed to fetch Docker GPG key."; return 1; }
+    chmod a+r "$keyring"
+
+    repo_file="/etc/apt/sources.list.d/docker.list"
+    printf 'deb [arch=%s signed-by=%s] https://download.docker.com/linux/%s %s stable\n' \
+        "$(dpkg --print-architecture)" "$keyring" "$distro" "$codename" \
+        > "$repo_file"
+
+    apt-get update -y \
+        || { log_error "apt-get update (after adding docker repo) failed."; return 1; }
+    apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin \
+        || { log_error "Installing docker-ce failed."; return 1; }
+
+    systemctl enable --now docker \
+        || { log_error "Could not enable/start dockerd."; return 1; }
+    log_info "Docker CE installed; dockerd is running."
+    return 0
+}
+
+# Offer to install the detected missing packages via apt. Returns 0 if all
+# installs succeeded, 1 if the operator declines / auto-install is unsupported
+# on this distro / any package failed.
+_offer_auto_install_deps() {
+    local missing="$1"
+    if ! command -v apt-get >/dev/null 2>&1; then
+        log_error "Automatic dependency install is only supported on Debian/Ubuntu (apt-get missing)."
+        log_error "Install these manually and re-run: $missing"
+        return 1
+    fi
+
+    echo
+    log_warn "Missing or unusable dependencies: $missing"
+    log_info "This installer can fetch and install them for you now."
+    ensure_tty_stdin
+    local answer=""
+    prompt_yes_no answer "Install missing packages now?" "yes"
+    [ "$answer" = "yes" ] || {
+        log_error "Declined — please install the packages manually and re-run."
+        return 1
+    }
+
+    log_step "Installing missing dependencies via apt"
+    apt-get update -y || { log_error "apt-get update failed."; return 1; }
+
+    # Partition the missing list: simple apt packages vs the docker bundle.
+    local simple_pkgs="" need_docker=0 item
+    for item in $missing; do
+        case "$item" in
+            docker|docker-daemon|docker-compose) need_docker=1 ;;
+            git)                    simple_pkgs="$simple_pkgs git" ;;
+            openssl)                simple_pkgs="$simple_pkgs openssl" ;;
+            useradd|usermod|getent) simple_pkgs="$simple_pkgs login" ;;  # provides useradd/usermod/getent on Debian family
+            sudo)                   simple_pkgs="$simple_pkgs sudo" ;;
+        esac
+    done
+    # Dedupe simple_pkgs (a user might have multiple "login"-provided binaries missing).
+    simple_pkgs="$(printf '%s\n' $simple_pkgs | awk 'NF && !seen[$0]++' | tr '\n' ' ')"
+
+    if [ -n "$simple_pkgs" ]; then
+        # shellcheck disable=SC2086  # intentional word-split on the package list
+        apt-get install -y $simple_pkgs \
+            || { log_error "apt-get install ($simple_pkgs) failed."; return 1; }
+    fi
+    if [ "$need_docker" -eq 1 ]; then
+        _install_docker_ce || return 1
+    fi
+    log_info "Dependency install complete."
+    return 0
+}
+
 phase1_dependency_checks() {
     log_step "Checking dependencies"
-    local uname_s missing=""
+    local uname_s
     uname_s="$(uname -s)"
     if [ "$uname_s" != "Linux" ]; then
         log_error "This installer targets Linux servers. Detected: $uname_s"
@@ -391,41 +561,34 @@ phase1_dependency_checks() {
         exit 1
     fi
 
-    if ! command -v docker >/dev/null 2>&1; then
-        missing="${missing} docker"
-    elif ! docker info >/dev/null 2>&1; then
-        missing="${missing} docker-daemon"
-    fi
-
-    DC_CMD="$(docker_compose_cmd)"
-    [ -z "$DC_CMD" ] && missing="${missing} docker-compose"
-
-    command -v git >/dev/null 2>&1     || missing="${missing} git"
-    command -v openssl >/dev/null 2>&1 || missing="${missing} openssl"
-
-    # Service-user management — required on every install. If these binaries
-    # aren't present (unusual for a standard Linux distro), the portal user
-    # can't be created and the whole install-dir-ownership model breaks.
-    command -v useradd >/dev/null 2>&1 || missing="${missing} useradd"
-    command -v usermod >/dev/null 2>&1 || missing="${missing} usermod"
-    command -v getent  >/dev/null 2>&1 || missing="${missing} getent"
-
-    # sudo is required — install.sh runs as the operator but creates system-
-    # level resources (user, systemd units, /usr/local/bin symlink).
-    command -v sudo >/dev/null 2>&1 || missing="${missing} sudo"
-
     # We do NOT gate on "is the user root or in the docker group" — that's a
     # rootful-era proxy. Rootless Docker (Lima's current default, Podman-
     # compatible setups) doesn't use the docker group at all: the daemon
-    # runs as the user and owns the socket. The `docker info` call above is
-    # the authoritative test for "can this user talk to a docker daemon."
+    # runs as the user and owns the socket. The `docker info` call inside
+    # _detect_missing_deps is the authoritative test for "can this user
+    # talk to a docker daemon."
+
+    local missing
+    missing="$(_detect_missing_deps)"
 
     if [ -n "$missing" ]; then
-        missing="${missing# }"
-        log_error "Missing or unusable: $missing"
-        syslog_event "Dependency check failed: $missing"
-        exit 1
+        _offer_auto_install_deps "$missing" || {
+            syslog_event "Dependency check failed: $missing"
+            exit 1
+        }
+        # Re-check: a successful install run should leave nothing missing,
+        # but a partial apt failure (network, repo drift, etc.) could.
+        missing="$(_detect_missing_deps)"
+        if [ -n "$missing" ]; then
+            log_error "Still missing after install attempt: $missing"
+            syslog_event "Dependency check failed after install attempt: $missing"
+            exit 1
+        fi
     fi
+
+    # Now cache the compose command variants for the rest of the script.
+    DC_CMD="$(docker_compose_cmd)"
+    DC_CMD_ABS="$(docker_compose_cmd_abs)" || DC_CMD_ABS="$DC_CMD"
 
     # Systemd isn't *required* (falls back to docker-compose-up-managed mode),
     # but it's expected on a production Linux host. Warn loudly if missing.
@@ -437,9 +600,6 @@ phase1_dependency_checks() {
         log_warn "Install will skip the unit install — stacks won't auto-start on boot."
     fi
 
-    # Absolute compose path is needed for systemd ExecStart lines.
-    DC_CMD_ABS="$(docker_compose_cmd_abs)" || DC_CMD_ABS="$DC_CMD"
-
     log_info "All dependencies satisfied. Compose command: $DC_CMD"
     [ "$SYSTEMD_AVAILABLE" -eq 1 ] && log_info "systemd detected — will install portal-{nginx,traefik}.service units."
 }
@@ -449,15 +609,8 @@ phase1_dependency_checks() {
 phase2_interactive_prompts() {
     log_step "Configuration"
 
-    # When piped from curl, stdin is the pipe — swap it for the terminal.
-    if is_curl_pipe_mode; then
-        if [ -r /dev/tty ]; then
-            exec < /dev/tty
-        else
-            log_error "Running in non-interactive pipe with no /dev/tty; cannot prompt."
-            exit 1
-        fi
-    fi
+    # Idempotent: phase 1's auto-install offer may have already reopened stdin.
+    ensure_tty_stdin
 
     while :; do
         prompt_with_default INSTALL_DIR "Install directory" "$INSTALL_DIR"
