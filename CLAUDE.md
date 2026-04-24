@@ -154,10 +154,15 @@ No build, no tests, no linter — this is purely shell + config.
 `install.sh` at the repo root is a single downloadable script for initial host setup. Distinct from `bin/bootstrap.sh` (which re-runs one-shot host setup on an already-cloned repo), `install.sh` clones the repo, patches the ACME email, creates the service user, chowns the install dir, installs systemd units, runs `bootstrap.sh` as the service user, enables + starts both stacks via systemctl, and optionally provisions a first site — all from an interactive prompt flow. Intended use: `curl ... | bash` on a fresh Linux server.
 
 ```bash
-# On a fresh production server:
+# Fresh server — one-liner is the default path. No flags, interactive
+# prompts drive the rest. Use this for every production install.
 curl -fsSL https://raw.githubusercontent.com/crxnit/traefik-nginx-portal/main/install.sh | bash
-# or download first:
-curl -fsSL https://raw.githubusercontent.com/crxnit/traefik-nginx-portal/main/install.sh -o install.sh && bash install.sh
+
+# Flag-case only (e.g. --restore-acme to preserve certs across a reinstall).
+# `bash -s -- --flag VALUE` doesn't cleanly forward through curl-pipe, so
+# download first when args are needed:
+curl -fsSL https://raw.githubusercontent.com/crxnit/traefik-nginx-portal/main/install.sh -o /tmp/install.sh
+sudo bash /tmp/install.sh --restore-acme /var/backups/portal-acme-<ts>.json
 ```
 
 Structure: 7 phases (preflight, dependency checks, prompts, confirm, install, verify, cleanup + final log). Writes a full session log to `/var/log/portal-install-TIMESTAMP.log` (falls back to `$HOME/` if unwritable) and emits syslog entries via `logger -t portal-install` at each phase. Exits 0 without changes if an existing installation is detected. When curl-piped, reopens stdin from `/dev/tty` so prompts still work.
@@ -172,9 +177,9 @@ Structure: 7 phases (preflight, dependency checks, prompts, confirm, install, ve
 
 **CI coverage.** `.github/workflows/ci.yml` globs `bin/*.sh` + `install.sh` for both `bash -n` and shellcheck. Keep new/edited scripts bash-3.2-compatible (macOS bash-3.2 runs the syntax check) and shellcheck-clean. The intentional `# shellcheck disable=SC2086` comments are on `$spa_flag` and `$DC_CMD` in phase 4 where word-splitting is required.
 
-**Teardown.** `teardown.sh` at repo root is the paired inverse of `install.sh`. Same self-elevate + curl-pipe pattern, same safety rails (blacklists system paths, refuses to remove `root`), typed-confirmation guard (operator must type the install-dir path), idempotent across partial-install states. Removes: systemd units → containers → networks → wrapper symlink → install dir → service user → install logs. Works remotely (`curl -fsSL .../teardown.sh | bash`) so you don't need a local checkout to nuke a broken install. `install.sh`'s partial-install-failure hint points at this script.
+**Teardown.** `teardown.sh` at repo root is the paired inverse of `install.sh`. Same self-elevate + curl-pipe pattern, same safety rails (blacklists system paths, refuses to remove `root`), typed-confirmation guard (operator must type the install-dir path), idempotent across partial-install states. Removes: systemd units → containers → networks → wrapper symlink → install dir → service user → install logs. Default teardown is the one-liner `curl -fsSL .../teardown.sh | bash`; download-first (same pattern as `install.sh`) is only needed when passing flags like `--backup-acme=PATH`. `install.sh`'s partial-install-failure hint points at this script.
 
-**Cert preservation across teardown/install cycles.** Let's Encrypt caps duplicate-cert issuance at **5 per exact hostname set per week** (rolling) — test cycles that re-provision the same FQDN burn through this fast. Workaround: `teardown.sh --backup-acme[=PATH]` copies `acme.json` (timestamped default under `/var/backups/`) before wiping; `install.sh --restore-acme PATH` drops that file back into the new install between the bootstrap step and systemctl's `enable --now`, so Traefik starts with pre-existing certs and doesn't hit ACME at all. The account key inside `acme.json` is preserved too, so the restored install stays tied to the same LE account — don't cross backups from different ACME-email configurations. Use this for iteration; fresh production installs should let ACME issue clean.
+**Cert preservation across teardown/install cycles.** Let's Encrypt caps duplicate-cert issuance at **5 per exact hostname set per week** (rolling) — test cycles that re-provision the same FQDN burn through this fast. Workaround: `teardown.sh --backup-acme[=PATH]` copies `acme.json` (timestamped default under `/var/backups/`) before wiping; `install.sh --restore-acme PATH` drops that file back into the new install between the bootstrap step and systemctl's `enable --now`, so Traefik starts with pre-existing certs and doesn't hit ACME at all. Both flags force the download-first invocation (the one-liner curl-pipe can't forward args through `bash -s --`). The account key inside `acme.json` is preserved too, so the restored install stays tied to the same LE account — don't cross backups from different ACME-email configurations. Use this for iteration; fresh production installs stick with the one-liner and let ACME issue clean.
 
 ## Conventions
 

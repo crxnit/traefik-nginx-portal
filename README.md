@@ -10,7 +10,41 @@ A single-host, multi-tenant web hosting stack built on **Traefik** (TLS terminat
 - **Hardened containers**: read-only root filesystems, dropped capabilities, `no-new-privileges`, healthchecks, resource limits, image pinning.
 - **Complete documentation** spanning architecture, operator procedures, AI context, app-development briefings, and a full idempotency audit.
 
-## Quickstart
+## Installation
+
+### Fresh server — one-line install (recommended)
+
+Single-command install. Self-elevates via sudo, checks dependencies, creates the `portal` service user, installs systemd units, runs bootstrap, optionally provisions a first site:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/crxnit/traefik-nginx-portal/main/install.sh | bash
+```
+
+Interactive prompts drive everything (install dir, ACME email, first FQDN, optional OAuth). Same paired teardown:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/crxnit/traefik-nginx-portal/main/teardown.sh | bash
+```
+
+### Passing flags — download first
+
+`bash -s -- --flag VALUE` doesn't cleanly forward through curl-pipe, so when you need flags (e.g. `--restore-acme` / `--backup-acme` for cert preservation across a reinstall), download first:
+
+```bash
+# Install with an acme.json restored from a prior teardown
+curl -fsSL https://raw.githubusercontent.com/crxnit/traefik-nginx-portal/main/install.sh -o /tmp/install.sh
+sudo bash /tmp/install.sh --restore-acme /var/backups/portal-acme-<ts>.json
+
+# Teardown with an explicit backup path
+curl -fsSL https://raw.githubusercontent.com/crxnit/traefik-nginx-portal/main/teardown.sh -o /tmp/teardown.sh
+sudo bash /tmp/teardown.sh --backup-acme=/var/backups/portal-acme-pre-upgrade.json
+```
+
+> **Before first deploy:** ensure DNS for your FQDNs points at the host *before* provisioning — ACME HTTP-01 validation needs the hostname to resolve. `install.sh` asks for your Let's Encrypt contact email and patches it into `traefik/traefik.yml` for you; you don't need to edit files manually.
+
+### Local development / manual install
+
+For a dev machine or custom install where you want to drive each step yourself:
 
 ```bash
 git clone <this-repo> /srv/portal
@@ -32,7 +66,7 @@ docker compose up -d
 ./bin/verify-networks.sh
 ```
 
-> **Before first deploy:** set a real contact email in `traefik/traefik.yml` (the `letsencrypt@example.com` placeholder must be replaced — Let's Encrypt sends expiration warnings there). And ensure DNS for your FQDNs points at the host *before* provisioning, since ACME HTTP-01 validation needs the hostname to resolve.
+Replace the `letsencrypt@example.com` placeholder in `traefik/traefik.yml` before starting Traefik (it only matters once you're issuing real certs, but easy to forget later).
 
 ## Documentation map
 
