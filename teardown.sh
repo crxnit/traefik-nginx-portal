@@ -136,6 +136,21 @@ handle_exit() {
 }
 trap handle_exit EXIT
 
+# Reopen stdin from /dev/tty when we're curl-piped. Without this, the
+# confirmation `read` gets nothing (curl's pipe is already closed after
+# the script download finished) and we abort without the operator even
+# seeing the prompt. Matches install.sh's pattern.
+ensure_tty_stdin() {
+    [ -t 0 ] && return 0
+    if [ -r /dev/tty ]; then
+        exec < /dev/tty
+    else
+        log_error "stdin is not interactive and /dev/tty is unavailable."
+        log_error "Pass --yes to bypass the confirmation prompt for non-interactive runs."
+        exit 1
+    fi
+}
+
 # --- Arg parsing -----------------------------------------------------------
 
 usage() {
@@ -259,10 +274,15 @@ log_step "Portal artifacts detected"
 # --- Confirmation ----------------------------------------------------------
 
 if [ "$SKIP_CONFIRM" -ne 1 ]; then
+    ensure_tty_stdin
     echo
     log_warn "This is destructive and cannot be undone."
-    log_warn "Any Let's Encrypt certs in $INSTALL_DIR/traefik/acme.json will be lost."
-    log_warn "(Back up with: sudo cp $INSTALL_DIR/traefik/acme.json ~/acme.json.bak)"
+    if [ "$BACKUP_ACME" -eq 1 ]; then
+        log_info "acme.json will be backed up to: $BACKUP_ACME_PATH"
+    else
+        log_warn "Any Let's Encrypt certs in $INSTALL_DIR/traefik/acme.json will be lost."
+        log_warn "(Back up with --backup-acme, then restore with install.sh --restore-acme)"
+    fi
     echo
     printf 'Type the install directory path to confirm:\n  %s\n> ' "$INSTALL_DIR"
     IFS= read -r answer || answer=""
