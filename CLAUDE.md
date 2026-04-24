@@ -174,6 +174,8 @@ Structure: 7 phases (preflight, dependency checks, prompts, confirm, install, ve
 
 **Teardown.** `teardown.sh` at repo root is the paired inverse of `install.sh`. Same self-elevate + curl-pipe pattern, same safety rails (blacklists system paths, refuses to remove `root`), typed-confirmation guard (operator must type the install-dir path), idempotent across partial-install states. Removes: systemd units → containers → networks → wrapper symlink → install dir → service user → install logs. Works remotely (`curl -fsSL .../teardown.sh | bash`) so you don't need a local checkout to nuke a broken install. `install.sh`'s partial-install-failure hint points at this script.
 
+**Cert preservation across teardown/install cycles.** Let's Encrypt caps duplicate-cert issuance at **5 per exact hostname set per week** (rolling) — test cycles that re-provision the same FQDN burn through this fast. Workaround: `teardown.sh --backup-acme[=PATH]` copies `acme.json` (timestamped default under `/var/backups/`) before wiping; `install.sh --restore-acme PATH` drops that file back into the new install between the bootstrap step and systemctl's `enable --now`, so Traefik starts with pre-existing certs and doesn't hit ACME at all. The account key inside `acme.json` is preserved too, so the restored install stays tied to the same LE account — don't cross backups from different ACME-email configurations. Use this for iteration; fresh production installs should let ACME issue clean.
+
 ## Conventions
 
 - FQDN validation lives in `_lib.sh::validate_fqdn`: lowercase, at least one dot, DNS-legal, and no path-escape characters. Wildcards and IDN/punycode labels are rejected. Edit the regex there, not in callers.

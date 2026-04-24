@@ -22,20 +22,21 @@
 #     bash teardown.sh [options]
 #
 # Options:
-#   -y, --yes            Skip confirmation prompt (for automation)
-#   --install-dir DIR    Install directory to remove (default: /srv/portal)
-#   --portal-user USER   Service user to remove (default: portal)
-#   -h, --help           Show this help
+#   -y, --yes              Skip confirmation prompt (for automation)
+#   --install-dir DIR      Install directory to remove (default: /srv/portal)
+#   --portal-user USER     Service user to remove (default: portal)
+#   --backup-acme [=PATH]  Copy acme.json to PATH before wiping (default:
+#                          /var/backups/portal-acme-YYYYMMDD-HHMMSS.json).
+#                          Pair with `install.sh --restore-acme PATH` to
+#                          avoid re-issuing certs on the next install —
+#                          Let's Encrypt has a 5/week duplicate-cert limit
+#                          per hostname set, which teardown/install cycles
+#                          burn through fast.
+#   -h, --help             Show this help
 #
 # Env overrides:
 #   INSTALL_DIR          default /srv/portal
 #   PORTAL_USER          default portal
-#
-# Let's Encrypt cert preservation: the script wipes $INSTALL_DIR wholesale,
-# so acme.json goes with it. If you want to carry certs to the next install,
-# back up manually before running:
-#     sudo cp /srv/portal/traefik/acme.json ~/acme.json.bak
-# and restore after install.sh completes.
 #
 # Bash 3.2 compatible. shellcheck --severity=warning clean.
 
@@ -53,10 +54,16 @@ Usage: teardown.sh [options]
 Fully remove a portal installation from the host.
 
 Options:
-  -y, --yes            Skip confirmation prompt (for automation)
-  --install-dir DIR    Install directory to remove (default: /srv/portal)
-  --portal-user USER   Service user to remove (default: portal)
-  -h, --help           Show this help
+  -y, --yes              Skip confirmation prompt (for automation)
+  --install-dir DIR      Install directory to remove (default: /srv/portal)
+  --portal-user USER     Service user to remove (default: portal)
+  --backup-acme[=PATH]   Back up acme.json before wipe. Default PATH is
+                         /var/backups/portal-acme-YYYYMMDD-HHMMSS.json.
+                         Refuses to overwrite an existing file. Pair with
+                         install.sh --restore-acme PATH to preserve Let's
+                         Encrypt certs (the 5/wk duplicate-cert rate limit
+                         makes re-issuance unreliable for test cycles).
+  -h, --help             Show this help
 
 Without --yes, prompts for confirmation by typing the install directory path.
 
@@ -97,6 +104,8 @@ fi
 INSTALL_DIR="${INSTALL_DIR:-/srv/portal}"
 PORTAL_USER="${PORTAL_USER:-portal}"
 SKIP_CONFIRM=0
+BACKUP_ACME=0         # toggled by --backup-acme
+BACKUP_ACME_PATH=""   # resolved before the destructive phase
 WRAPPER_SYMLINK="/usr/local/bin/portal"
 # Same container set install.sh manages. Keep in sync if the compose services
 # ever grow (the OAuth sidecar was added here when that feature landed).
@@ -152,9 +161,35 @@ while [ "$#" -gt 0 ]; do
         -y|--yes)        SKIP_CONFIRM=1; shift ;;
         --install-dir)   INSTALL_DIR="$2"; shift 2 ;;
         --portal-user)   PORTAL_USER="$2"; shift 2 ;;
+        # Accept all three shapes: --backup-acme (default path),
+        # --backup-acme=PATH, and --backup-acme PATH.
+        --backup-acme)   BACKUP_ACME=1; shift
+                         # If the next arg doesn't look like another flag,
+                         # consume it as the path.
+                         if [ "$#" -gt 0 ] && [ "${1#--}" = "$1" ]; then
+                             BACKUP_ACME_PATH="$1"; shift
+                         fi ;;
+        --backup-acme=*) BACKUP_ACME=1; BACKUP_ACME_PATH="${1#*=}"; shift ;;
         *) log_error "Unknown argument: $1"; echo; usage ;;
     esac
 done
+
+# Resolve the default backup path now (not at flag-parse time) so the
+# timestamp reflects when teardown actually runs — useful if the operator
+# Ctrl-C's at the confirmation prompt and re-runs later.
+if [ "$BACKUP_ACME" -eq 1 ] && [ -z "$BACKUP_ACME_PATH" ]; then
+    BACKUP_ACME_PATH="/var/backups/portal-acme-$(date +%Y%m%d-%H%M%S).json"
+fi
+
+# Refuse to overwrite an existing backup file — a stale backup from an
+# earlier teardown would silently clobber. If the operator really wants
+# to overwrite, they pass the path explicitly (we don't validate the
+# path for existence in that case — their explicit choice).
+if [ "$BACKUP_ACME" -eq 1 ] && [ -e "$BACKUP_ACME_PATH" ]; then
+    log_error "Backup path already exists: $BACKUP_ACME_PATH"
+    log_error "Remove it or pick a different path (--backup-acme=/path/to/new.json)."
+    exit 1
+fi
 
 # --- Safety: refuse system paths + refuse root user ------------------------
 # Same blacklist install.sh uses. A typo here would rm -rf a system dir.
@@ -219,6 +254,7 @@ log_step "Portal artifacts detected"
 [ "$WRAPPER_PRESENT" -eq 1 ]     && log_info "Wrapper symlink:    $WRAPPER_SYMLINK"
 [ -n "$CONTAINERS_PRESENT" ]     && log_info "Containers:         ${CONTAINERS_PRESENT% }"
 [ -n "$NETWORKS_PRESENT" ]       && log_info "Docker networks:    ${NETWORKS_PRESENT% }"
+[ "$BACKUP_ACME" -eq 1 ]         && log_info "Backup acme.json:   $BACKUP_ACME_PATH"
 
 # --- Confirmation ----------------------------------------------------------
 
@@ -289,6 +325,28 @@ if [ "$WRAPPER_PRESENT" -eq 1 ]; then
     log_step "Removing wrapper"
     rm -f "$WRAPPER_SYMLINK"
     log_ok "$WRAPPER_SYMLINK removed"
+fi
+
+# 4a. acme.json backup — must happen BEFORE we rm -rf the install dir.
+# Keeps mode 600 (the source file is already 600; `install -m 600` enforces
+# it regardless). Destination dir is created with mode 700 if missing so
+# operators can't grep the backups world-readable.
+if [ "$BACKUP_ACME" -eq 1 ]; then
+    log_step "Backing up acme.json"
+    src_acme="${INSTALL_DIR}/traefik/acme.json"
+    if [ ! -f "$src_acme" ]; then
+        log_warn "No acme.json at $src_acme — nothing to back up."
+    else
+        backup_dir="$(dirname "$BACKUP_ACME_PATH")"
+        mkdir -p "$backup_dir"
+        chmod 700 "$backup_dir" 2>/dev/null || true
+        install -m 600 -o root -g root "$src_acme" "$BACKUP_ACME_PATH" \
+            || { log_error "Backup copy failed."; exit 1; }
+        log_ok "acme.json → $BACKUP_ACME_PATH"
+        log_info "Restore on next install:"
+        log_info "  curl -fsSL .../install.sh -o install.sh"
+        log_info "  sudo bash install.sh --restore-acme $BACKUP_ACME_PATH"
+    fi
 fi
 
 # 5. Install directory.

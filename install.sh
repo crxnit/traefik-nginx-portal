@@ -41,6 +41,35 @@ set -euo pipefail
 # permission denied" before its healthcheck ever runs.
 umask 022
 
+# --- Early --help (before self-elevate — no password prompt just to
+#     print usage). Must stay in sync with _print_usage later.
+
+case "${1:-}" in
+    -h|--help)
+        cat <<'EOF'
+Usage: install.sh [options]
+
+Options:
+  --restore-acme PATH   After bootstrap creates an empty acme.json, replace it
+                        with this file. Paired with teardown.sh --backup-acme
+                        to preserve Let's Encrypt certs across teardown/install
+                        cycles (avoids the 5/wk duplicate-cert rate limit).
+  -h, --help            Show this help.
+
+All other configuration is gathered interactively in phase 2. See the repo's
+CLAUDE.md "Server installer" section for the full flow.
+
+Remote invocation (standard):
+  curl -fsSL https://raw.githubusercontent.com/crxnit/traefik-nginx-portal/main/install.sh | bash
+
+With --restore-acme, download first so args can be passed:
+  curl -fsSL .../install.sh -o install.sh
+  sudo bash install.sh --restore-acme /var/backups/portal-acme-20260424-120000.json
+EOF
+        exit 0
+        ;;
+esac
+
 # --- Self-elevate ----------------------------------------------------------
 # Runs before any other logic so the operator gets at most one terse line
 # of output ("Re-executing via sudo ...") before the real installer UI
@@ -122,6 +151,10 @@ OAUTH_CLIENT_SECRET=""
 OAUTH_DOMAIN=""
 OAUTH_COOKIE_SECRET=""
 OAUTH_PROTECT_INITIAL="no"  # attach --oauth to the first provision-site call
+
+# Optional acme.json backup restore — skip LE re-issuance after a teardown.
+# Set via --restore-acme PATH. Validated in main() before phase 4 runs.
+RESTORE_ACME_PATH=""
 
 # --- Colors ----------------------------------------------------------------
 
@@ -858,6 +891,9 @@ phase3_confirmation() {
     else
         printf '  %-25s %s\n' "OAuth:"            "not configured (can be enabled later via .env)"
     fi
+    if [ -n "$RESTORE_ACME_PATH" ]; then
+        printf '  %-25s %s\n' "Restore acme.json:" "$RESTORE_ACME_PATH"
+    fi
     if [ "$SYSTEMD_AVAILABLE" -eq 1 ]; then
         printf '  %-25s %s\n' "Lifecycle:"        "systemd (portal-nginx.service, portal-traefik.service)"
     else
@@ -1109,6 +1145,23 @@ phase4_install() {
     syslog_event "Running bootstrap"
     run_as_portal "${INSTALL_DIR}/${BOOTSTRAP_SCRIPT}"
 
+    # Restore acme.json from a previous teardown's backup, if one was given.
+    # Runs AFTER bootstrap (which created an empty acme.json owned by portal,
+    # mode 600) and BEFORE systemctl starts Traefik — so Traefik comes up
+    # with the pre-existing certs and doesn't hit Let's Encrypt at all.
+    #
+    # `install -m 600 -o ... -g ...` copies + sets mode + owner atomically;
+    # overwrites the empty file that bootstrap just created.
+    if [ -n "$RESTORE_ACME_PATH" ]; then
+        log_step "Restoring acme.json from $RESTORE_ACME_PATH"
+        syslog_event "Restoring acme.json from $RESTORE_ACME_PATH"
+        local dest="${INSTALL_DIR}/traefik/acme.json"
+        install -m 600 -o "$PORTAL_USER" -g "$PORTAL_USER" \
+            "$RESTORE_ACME_PATH" "$dest" \
+            || { log_error "Restore failed copying $RESTORE_ACME_PATH → $dest"; exit 1; }
+        log_ok "acme.json restored (mode 600, owner $PORTAL_USER)"
+    fi
+
     if [ "$SYSTEMD_AVAILABLE" -eq 1 ]; then
         log_step "Enabling + starting systemd units"
         syslog_event "Enabling systemd units"
@@ -1267,10 +1320,70 @@ EOF
     wait 2>/dev/null || true
 }
 
+# --- Argument parsing ------------------------------------------------------
+# The installer's happy path is no-args (interactive prompts drive
+# everything). Flags exist for narrow overrides that don't fit the
+# interactive flow — right now that's just --restore-acme.
+
+_print_usage() {
+    cat <<EOF
+Usage: install.sh [options]
+
+Options:
+  --restore-acme PATH   After bootstrap creates an empty acme.json, replace it
+                        with this file. Paired with teardown.sh --backup-acme
+                        to preserve Let's Encrypt certs across teardown/install
+                        cycles (avoids the 5/wk duplicate-cert rate limit).
+  -h, --help            Show this help.
+
+All other configuration is gathered interactively in phase 2. See the repo's
+CLAUDE.md "Server installer" section for the full flow.
+
+Remote invocation (standard):
+  curl -fsSL https://raw.githubusercontent.com/crxnit/traefik-nginx-portal/main/install.sh | bash
+
+With --restore-acme, download first so args can be passed:
+  curl -fsSL .../install.sh -o install.sh
+  sudo bash install.sh --restore-acme /var/backups/portal-acme-20260424-120000.json
+EOF
+}
+
+_parse_args() {
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --restore-acme)
+                [ "$#" -ge 2 ] || { log_error "--restore-acme requires a path"; exit 1; }
+                RESTORE_ACME_PATH="$2"; shift 2 ;;
+            --restore-acme=*)
+                RESTORE_ACME_PATH="${1#*=}"; shift ;;
+            -h|--help)
+                _print_usage; exit 0 ;;
+            *)
+                log_error "Unknown argument: $1"
+                _print_usage >&2
+                exit 1 ;;
+        esac
+    done
+
+    # Validate the restore path now, so we fail before doing any destructive
+    # work rather than mid-way through phase 4 (partial install leftover).
+    if [ -n "$RESTORE_ACME_PATH" ]; then
+        [ -f "$RESTORE_ACME_PATH" ] \
+            || { log_error "Restore path does not exist: $RESTORE_ACME_PATH"; exit 1; }
+        [ -r "$RESTORE_ACME_PATH" ] \
+            || { log_error "Restore path not readable: $RESTORE_ACME_PATH"; exit 1; }
+        [ -s "$RESTORE_ACME_PATH" ] \
+            || log_warn "Restore path is empty: $RESTORE_ACME_PATH (will restore an empty acme.json — pointless but not broken)"
+    fi
+}
+
 # --- Entry point -----------------------------------------------------------
 
 main() {
+    # setup_colors FIRST — log_error inside _parse_args reads the color vars,
+    # and set -u would error if they're undefined.
     setup_colors
+    _parse_args "$@"
     trap handle_sigint INT
     trap handle_exit EXIT
     setup_log
