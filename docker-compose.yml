@@ -54,13 +54,13 @@ services:
   # --oauth / --oauth-public; the dynamic YAML for that site attaches the
   # oauth-google-forward-auth@file middleware (see traefik/dynamic/_oauth.yml).
   #
-  # The image is built + published by a separate fork at
-  # github.com/crxnit/traefik-forward-auth after a security triage. Until
-  # that fork produces a signed release, the tag is a placeholder that
-  # deliberately won't pull — prevents accidentally shipping unreviewed
-  # upstream code to prod.
+  # Image is built + published by github.com/crxnit/traefik-forward-auth,
+  # a fork of thomseddon/traefik-forward-auth that's passed a security
+  # triage (AUDIT.md in that repo). Tag format is <fork-version>-src.<upstream-
+  # tag>, so v1.0.1-src.v2.3.0 = fork release 1.0.1 built from upstream v2.3.0.
+  # Bump via Dependabot when the fork cuts a new release.
   traefik-forward-auth-google:
-    image: ghcr.io/crxnit/traefik-forward-auth:audit-pending
+    image: ghcr.io/crxnit/traefik-forward-auth:v1.0.1-src.v2.3.0
     container_name: traefik-forward-auth-google
     profiles:
       - oauth
