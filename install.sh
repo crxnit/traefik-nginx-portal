@@ -1159,7 +1159,10 @@ phase4_install() {
         install -m 600 -o "$PORTAL_USER" -g "$PORTAL_USER" \
             "$RESTORE_ACME_PATH" "$dest" \
             || { log_error "Restore failed copying $RESTORE_ACME_PATH → $dest"; exit 1; }
-        log_ok "acme.json restored (mode 600, owner $PORTAL_USER)"
+        # log_info (not log_ok) — install.sh's log vocabulary is info/warn/error/
+        # step only; log_ok is a _lib.sh helper that's not sourced here. Under
+        # set -e a stray log_ok kills the script mid-phase-4 (did that once).
+        log_info "acme.json restored (mode 600, owner $PORTAL_USER)"
     fi
 
     if [ "$SYSTEMD_AVAILABLE" -eq 1 ]; then
