@@ -172,6 +172,8 @@ Structure: 7 phases (preflight, dependency checks, prompts, confirm, install, ve
 
 **CI coverage.** `.github/workflows/ci.yml` globs `bin/*.sh` + `install.sh` for both `bash -n` and shellcheck. Keep new/edited scripts bash-3.2-compatible (macOS bash-3.2 runs the syntax check) and shellcheck-clean. The intentional `# shellcheck disable=SC2086` comments are on `$spa_flag` and `$DC_CMD` in phase 4 where word-splitting is required.
 
+**Teardown.** `teardown.sh` at repo root is the paired inverse of `install.sh`. Same self-elevate + curl-pipe pattern, same safety rails (blacklists system paths, refuses to remove `root`), typed-confirmation guard (operator must type the install-dir path), idempotent across partial-install states. Removes: systemd units → containers → networks → wrapper symlink → install dir → service user → install logs. Works remotely (`curl -fsSL .../teardown.sh | bash`) so you don't need a local checkout to nuke a broken install. `install.sh`'s partial-install-failure hint points at this script.
+
 ## Conventions
 
 - FQDN validation lives in `_lib.sh::validate_fqdn`: lowercase, at least one dot, DNS-legal, and no path-escape characters. Wildcards and IDN/punycode labels are rejected. Edit the regex there, not in callers.
