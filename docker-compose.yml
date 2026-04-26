@@ -10,6 +10,18 @@ services:
       - ./traefik/dynamic/:/etc/traefik/dynamic/:ro
       - ./traefik/certs/:/etc/traefik/certs/:ro
       - ./traefik/acme.json:/acme.json
+    environment:
+      # Route53 DNS-01 credentials for the letsencrypt-dns resolver. Empty
+      # when only HTTP-01 sites are deployed; lego skips DNS challenges
+      # silently in that case (the resolver is opt-in per site). Sourced
+      # from .env via compose substitution; same `:-` empty-default pattern
+      # as the OAuth sidecar below so list-sites/etc. don't trip when these
+      # aren't set. AWS_HOSTED_ZONE_ID is optional — lego discovers the
+      # zone via ListHostedZonesByName when omitted.
+      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-}"
+      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-}"
+      AWS_REGION: "${AWS_REGION:-us-east-1}"
+      AWS_HOSTED_ZONE_ID: "${AWS_HOSTED_ZONE_ID:-}"
     networks:
       - traefik
       - edge

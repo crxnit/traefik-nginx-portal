@@ -53,6 +53,24 @@ certificatesResolvers:
       storage: /acme.json
       httpChallenge:
         entryPoint: web
+  # DNS-01 resolver for sites that need wildcard certs (e.g. apps that mint
+  # per-tenant subdomains). Opt-in per site via tls.certResolver:
+  # letsencrypt-dns + tls.domains in the dynamic YAML; HTTP-01 stays the
+  # default for everything else. Requires AWS_ACCESS_KEY_ID +
+  # AWS_SECRET_ACCESS_KEY (+ AWS_REGION, optional AWS_HOSTED_ZONE_ID) in
+  # .env, scoped to route53:ChangeResourceRecordSets on the relevant zone.
+  letsencrypt-dns:
+    acme:
+      email: letsencrypt@example.com
+      storage: /acme.json
+      dnsChallenge:
+        provider: route53
+        # Public resolvers used for the post-publish propagation check —
+        # avoids races where lego asks the local resolver before Route53's
+        # change has propagated outward.
+        resolvers:
+          - "1.1.1.1:53"
+          - "8.8.8.8:53"
 
 log:
   level: INFO

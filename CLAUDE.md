@@ -92,6 +92,41 @@ Sites can be protected behind Google Workspace sign-in (or, by reconfiguring the
 
 **What's NOT supported.** Provider chaining on a single site ("sign in with Google OR Microsoft") — traefik-forward-auth is one-provider-per-instance. Workflows that need that are Authelia/Dex/Keycloak territory.
 
+### Wildcard certs (per-tenant subdomains)
+
+Sites can opt into a wildcard cert (`*.example.com`) via the **`letsencrypt-dns` ACME resolver** — Route53 DNS-01, defined alongside the default `letsencrypt` HTTP-01 in `traefik.yml`. First case is `admitly.io`, which mints `<user>.admitly.io` on signup and needs a cert that already covers any subdomain a future signup might create.
+
+**Why DNS-01 not HTTP-01.** HTTP-01 can't issue wildcard certs — Let's Encrypt requires DNS-01 for `*.example.com`. Per-subdomain on-demand HTTP-01 issuance is a non-starter for signup-driven products: LE caps duplicate-cert issuance at 50 per registered domain per week, which a popular launch would burn through in hours.
+
+**Per-site opt-in** in the dynamic YAML — three things to get right:
+
+1. **Router rule** matches both apex and any one-label subdomain (note the escaped `\\.` — YAML string + Traefik regex layers both need it):
+   ```yaml
+   rule: "Host(`example.com`) || HostRegexp(`^[a-z0-9-]+\\.example\\.com$`)"
+   ```
+
+2. **`tls.certResolver: letsencrypt-dns`** — opts this site into DNS-01. Without it, Traefik falls back to the first defined resolver (HTTP-01) and fails with `acme: could not determine solvers` on the wildcard.
+
+3. **`tls.domains` MUST include apex as `main` AND wildcard as a SAN.** Wildcard certs in TLS don't cover the parent — `*.example.com` matches `foo.example.com` but not bare `example.com`. Common mistake: only listing `*.example.com` in `main` produces a cert that doesn't cover the apex (apex falls back to a stale HTTP-01 cert from a prior deployment, or to the self-signed default).
+   ```yaml
+   tls:
+     certResolver: letsencrypt-dns
+     domains:
+       - main: example.com
+         sans:
+           - "*.example.com"
+   ```
+
+**nginx side** — `server_name example.com *.example.com;` in the conf.d block. The app backend reads the `Host` header (or `X-Forwarded-Host`) to dispatch by tenant.
+
+**AWS provisioning.** `bin/iam-route53-setup.sh --domain example.com` (run from an operator workstation, NOT prod — it uses your local admin AWS creds to mint narrow-scope creds for prod) creates a least-privilege IAM user, attaches an inline policy scoped to the relevant Route53 hosted zone, mints an access key, and emits a mode-600 `.env` snippet for transport to prod. Idempotent; pass `--rotate-key` to replace an existing key.
+
+**Static config = restart, dynamic = reload.** `traefik.yml` (where the resolvers are defined) is the **static** config — read only at process startup. The `dynamic/` directory is hot-reloaded, but adding a new resolver requires `systemctl restart portal-traefik`. A dynamic YAML referencing a resolver that isn't yet in the running static config errors with `Router uses a nonexistent certificate resolver` — that means the YAML pull made it to prod but Traefik wasn't restarted.
+
+**Stale `acme.json` certs during iteration.** If you change `tls.domains` after a cert was already issued (e.g. forgot the apex SAN the first time), Traefik may not re-issue — it checks whether existing certs cover the requested domains and can keep serving the old one. Surgical fix: `jq` out the bad entry from `letsencrypt-dns.Certificates`, back up `acme.json` first (typo = lose all certs), restart Traefik, hit the site to trigger re-issuance.
+
+**Adding a second DNS provider later.** Naming is specific (`letsencrypt-dns` rather than generic `wildcard`), so a second provider (Cloudflare, DigitalOcean, etc.) lands as a third resolver entry in `traefik.yml` — copy-paste-rename, swap `dnsChallenge.provider` + the env vars in `docker-compose.yml`. Sites pick which resolver to opt into per dynamic file.
+
 ### App backends (proxied apps)
 
 The portal originally hosted static sites only. It also supports **path-split sites** that serve static content at `/` and reverse-proxy a path prefix (e.g. `/api/`) to a backend container — first example is `admitly.io` (MPA frontend + FastAPI backend that streams vLLM SSE deltas to the browser).
@@ -163,6 +198,12 @@ journalctl -u portal-traefik -f            # live logs (compose logs still work 
 ./bin/deprovision-site.sh <fqdn> [--dry-run] [--yes] [--keep-content]
 ./bin/reload-nginx.sh
 
+# Workstation-only — sets up the AWS IAM user + Route53 policy + access
+# key for the letsencrypt-dns resolver. Runs against your local AWS CLI
+# credentials (admin-level), produces narrow-scope creds for prod's .env.
+# Do NOT run via the `portal` wrapper — see script header.
+./bin/iam-route53-setup.sh --domain <fqdn> [--user NAME] [--rotate-key]
+
 # Override knobs
 TRAEFIK_DYNAMIC_DIR=/opt/traefik/dynamic ./bin/provision-site.sh ...
 NGINX_CONTAINER=staging-nginx TRAEFIK_CONTAINER=staging-traefik ./bin/verify-networks.sh
@@ -212,13 +253,14 @@ Structure: 7 phases (preflight, dependency checks, prompts, confirm, install, ve
 - Provision script is one-shot by design: it refuses to overwrite any of the three artifacts if they already exist. Deprovision requires typing the FQDN to confirm (unless `--yes`). This is deliberate — see `IDEMPOTENCY_AUDIT.md` Open Question Q1.
 - Generated files (`conf.d/<fqdn>.conf`, `dynamic/<fqdn>.yml`) contain no timestamps or run-specific metadata — running the provision template twice produces byte-identical output (if the overwrite guard were removed).
 - `00-default.conf` is the catchall `server_name _` that handles unknown Host headers; keep it present — the nginx healthcheck relies on it.
-- `.env` at the install root is the single source of truth for `COMPOSE_PROFILES` and OAuth credentials. Gitignored, mode 600, owned by portal. `install.sh` writes it; operators edit in place + `systemctl restart portal-traefik` to apply. Don't commit a `.env.example` either — the schema lives in CLAUDE.md (above) and `install.sh`'s `phase4_write_env_file` comment block, so there's no template to rot.
+- `.env` at the install root is the single source of truth for `COMPOSE_PROFILES`, OAuth credentials, and Route53 DNS-01 credentials. Gitignored, mode 600, owned by portal. `install.sh` writes it; operators edit in place + `systemctl restart portal-traefik` to apply. Don't commit a `.env.example` either — the schema lives in CLAUDE.md (above) and `install.sh`'s `phase4_write_env_file` comment block, so there's no template to rot. Route53 vars (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, optional `AWS_HOSTED_ZONE_ID`) stay blank by default; populate only when a site opts into the `letsencrypt-dns` resolver. IAM policy is least-privilege: `route53:GetChange` cluster-wide + `route53:ChangeResourceRecordSets` / `route53:ListResourceRecordSets` scoped to the relevant hosted zone (+ `route53:ListHostedZonesByName` if `AWS_HOSTED_ZONE_ID` is unset).
 - **install.sh and teardown.sh don't source `_lib.sh`** — they're standalone bootstrappers that can't assume the repo exists yet (install.sh) or still exists (teardown.sh). Their log vocabulary is narrower: `log_info`, `log_warn`, `log_error`, `log_step` only. **No `log_ok` or `log_skip`** — those live in `_lib.sh` and are only available to `bin/*.sh`. Reaching for them in install.sh/teardown.sh silently passes `bash -n` + `shellcheck` (they're valid function names, just undefined) and only fails at runtime with `command not found` — which `set -e` turns into a mid-phase crash. If you want a "success" tag in install.sh, use `log_info` with explicit phrasing ("Wrote …", "Installed …") and accept the color difference.
 - **Interactive scripts that support `curl … | bash` must reopen stdin from `/dev/tty`** before the first `read`. When curl-piped, bash inherits stdin from the (closed) download pipe; the self-elevate via `sudo -E bash "$tmp"` preserves that broken stdin. A `read` there gets empty input and silently fails the prompt. Both `install.sh::ensure_tty_stdin` and `teardown.sh::ensure_tty_stdin` implement the `[ -t 0 ] && return 0; exec < /dev/tty` pattern — copy that into any new bootstrap-style script, don't improvise.
 - **App backends live at `/srv/portal-apps/<name>/`** — sibling to the portal repo, never inside it. Each app is its own compose stack joined to the `external: true` `edge` network, with `container_name: <name>-backend` so nginx's upstream block can resolve it by name. The portal owns routing; the app stack owns its own lifecycle (volumes, env, healthcheck, optional `portal-app-<name>.service`). See "App backends (proxied apps)" under Architecture for the nginx hand-edit pattern and SSE-critical settings.
+- **Use `systemctl restart`, not `start`, on the portal units.** `portal-nginx.service` and `portal-traefik.service` are both `Type=oneshot` + `RemainAfterExit=yes`, which means systemd reports them as `active (exited)` after `docker compose up -d` returns 0 — and `systemctl start` on an already-active unit is a **no-op**. So `docker compose down && systemctl start portal-traefik` leaves you with no containers running and systemd cheerfully claiming the unit is fine. Always `systemctl restart` (which forces stop+start, re-running ExecStart). Also: don't reach for `compose down` to apply `.env` changes — `systemctl restart portal-traefik` already invokes `docker compose up -d`, which re-substitutes `.env` and recreates containers when their env or config changed.
 
 ## Known limitations
 
-- **Only HTTP-01 ACME challenge** (`traefik.yml`). Requires :80 reachable from the internet. No DNS-01 fallback configured; wildcard certs unavailable.
+- **Two ACME resolvers, HTTP-01 is the default.** `letsencrypt` (HTTP-01, requires :80 reachable from the internet) is what every site gets unless it explicitly opts into `letsencrypt-dns` (Route53 DNS-01) via `tls.certResolver` + `tls.domains` in its dynamic YAML. DNS-01 exists for sites that mint per-tenant subdomains and need wildcard certs (e.g. `*.admitly.io`); requires AWS credentials in `.env` (see schema). Other DNS providers would land as additional resolver entries — Route53 is the only one wired today.
 - **Per-site nginx logs are not persisted** — they ride the container's stdout/stderr via Docker's logging driver. Add a `./logs:/var/log/nginx` volume + logrotate if you need on-disk per-site logs.
 - **Default TLS cert is self-signed** (via `ensure-default-tls.sh`). Clients hitting unknown hostnames get a browser cert warning before seeing Traefik's 404. This is working-as-intended for a catchall; if you want a real CA-signed default, dump an existing Let's Encrypt cert from `acme.json` via a sidecar and point `_default-tls.yml` at it.

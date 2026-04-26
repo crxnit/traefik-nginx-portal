@@ -1035,6 +1035,24 @@ OAUTH_PROVIDERS_GOOGLE_CLIENT_ID=${OAUTH_CLIENT_ID}
 OAUTH_PROVIDERS_GOOGLE_CLIENT_SECRET=${OAUTH_CLIENT_SECRET}
 OAUTH_SECRET=${OAUTH_COOKIE_SECRET}
 OAUTH_DOMAIN=${OAUTH_DOMAIN}
+
+# --- Route53 DNS-01 (wildcard certs) ---
+# Required only for sites that opt into the letsencrypt-dns resolver in
+# their dynamic YAML (e.g. apps that mint per-tenant subdomains and need
+# *.example.com). Leave blank for HTTP-01-only deployments.
+#
+# IAM policy (least-privilege) attached to the access key:
+#   route53:GetChange                — on arn:aws:route53:::change/*
+#   route53:ChangeResourceRecordSets — on arn:aws:route53:::hostedzone/<ZONE_ID>
+#   route53:ListResourceRecordSets   — on arn:aws:route53:::hostedzone/<ZONE_ID>
+#   route53:ListHostedZonesByName    — on * (zone discovery; omit if HOSTED_ZONE_ID set)
+#
+# AWS_HOSTED_ZONE_ID is optional — pin it to skip the zone-discovery API
+# call (and let you drop ListHostedZonesByName from the policy).
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+AWS_REGION=us-east-1
+AWS_HOSTED_ZONE_ID=
 EOF
     sudo chown "$PORTAL_USER:$PORTAL_USER" "$env_file" \
         || { log_error "chown $env_file failed."; exit 1; }
