@@ -92,9 +92,30 @@ Sites can be protected behind Google Workspace sign-in (or, by reconfiguring the
 
 **What's NOT supported.** Provider chaining on a single site ("sign in with Google OR Microsoft") — traefik-forward-auth is one-provider-per-instance. Workflows that need that are Authelia/Dex/Keycloak territory.
 
+### App backends (proxied apps)
+
+The portal originally hosted static sites only. It also supports **path-split sites** that serve static content at `/` and reverse-proxy a path prefix (e.g. `/api/`) to a backend container — first example is `admitly.io` (MPA frontend + FastAPI backend that streams vLLM SSE deltas to the browser).
+
+**Backend stacks live at `/srv/portal-apps/<name>/`** — sibling to the portal repo, *not* inside it. Each app is its own `docker-compose.yml` with `container_name: <name>-backend` (so nginx can resolve it by service name), joined to the `external: true` `edge` network, with whatever volumes/env/healthcheck the app needs. The portal owns the routing edge; the app stack owns its own lifecycle. Mirror the `portal-traefik.service` pattern with a `portal-app-<name>.service` if you want it to boot with the host.
+
+**The nginx config is hand-edited after `portal provision-site`.** The provision script generates a static-only server block; for a proxied app you add a `location ^~ /api/ { proxy_pass http://<name>-backend:PORT; ... }` block before the static-asset regex. The `^~` prefix is critical — without it, a request to `/api/foo.js` (or any path ending in a static-asset extension) gets captured by the cache regex and 404s, because nginx normally lets regex matches override prefix matches. We considered adding `--backend HOST:PORT` flags to `provision-site.sh` and declined; the hand-edit pattern is fine until a second or third proxied app emerges and a real shape becomes obvious.
+
+**SSE-critical nginx settings** for any backend that streams (LLM responses, log tails, progress events):
+
+- `proxy_buffering off` — without it, clients see nothing until generation completes, then the whole response in one burst. #1 SSE footgun and the silent-breakage everyone hits first.
+- `proxy_read_timeout 1h` / `proxy_send_timeout 1h` — defaults are 60s, which truncate any long generation mid-stream.
+- `proxy_http_version 1.1` + `proxy_set_header Connection ""` — required for upstream keepalive (paired with an `upstream { ... keepalive 32; }` block).
+- `proxy_ignore_client_abort on` — when paired with a backend that has a detached upstream pump (admitly.io's FastAPI tees vLLM deltas into an asyncio queue and persists regardless of client state), persistence completes even if the client tab closes mid-stream. Belt-and-suspenders with the app's own design.
+
+**Traefik needs no changes for SSE.** Traefik 3 auto-detects `Content-Type: text/event-stream` and flushes writes to the client immediately, ignoring its `flushInterval` setting. Default `entryPoints.websecure.transport.respondingTimeouts.writeTimeout` of `0` means no write limit, and `serversTransport.forwardingTimeouts.responseHeaderTimeout` defaults to `0` too. The path-split happens entirely at the nginx layer; Traefik just routes by Host. The dynamic file `portal provision-site` generates is the right file unchanged.
+
+**OAuth interaction.** `--oauth` covers the whole site, API included. If the backend wants to do its own auth (bearer tokens, signed webhooks, etc.), pair with `--oauth-public=/api/` so the API path bypasses the forward-auth middleware.
+
+**Deprovision is unchanged.** `deprovision-site.sh` removes the three artifacts by filename — it doesn't parse contents and doesn't know the nginx config has a proxy block. The backend stack at `/srv/portal-apps/<name>/` is an operator concern: `docker compose down` and `rm -rf` separately if you want it fully gone.
+
 ### Request flow
 
-Client → Traefik :443 (terminates TLS, matches `Host()` rule from a `dynamic/<fqdn>.yml`) → routes over the `edge` network to the `nginx-backend` service (defined in `_shared-services.yml`) → nginx matches `server_name` in `conf.d/<fqdn>.conf` → serves from `/var/www/<fqdn>/`. nginx trusts `X-Forwarded-For` from `172.16.0.0/12`, `10.0.0.0/8`, and `192.168.0.0/16` (all RFC1918 Docker ranges) via `set_real_ip_from`.
+Client → Traefik :443 (terminates TLS, matches `Host()` rule from a `dynamic/<fqdn>.yml`) → routes over the `edge` network to the `nginx-backend` service (defined in `_shared-services.yml`) → nginx matches `server_name` in `conf.d/<fqdn>.conf` → serves from `/var/www/<fqdn>/`, *or* (for proxied-app sites) reverse-proxies a path prefix to a backend container on the `edge` network — see "App backends (proxied apps)" above. nginx trusts `X-Forwarded-For` from `172.16.0.0/12`, `10.0.0.0/8`, and `192.168.0.0/16` (all RFC1918 Docker ranges) via `set_real_ip_from`.
 
 Plain HTTP (:80) is configured to redirect everything to `websecure`. TLS options pin TLS 1.2+ and an explicit cipher suite list.
 
@@ -194,6 +215,7 @@ Structure: 7 phases (preflight, dependency checks, prompts, confirm, install, ve
 - `.env` at the install root is the single source of truth for `COMPOSE_PROFILES` and OAuth credentials. Gitignored, mode 600, owned by portal. `install.sh` writes it; operators edit in place + `systemctl restart portal-traefik` to apply. Don't commit a `.env.example` either — the schema lives in CLAUDE.md (above) and `install.sh`'s `phase4_write_env_file` comment block, so there's no template to rot.
 - **install.sh and teardown.sh don't source `_lib.sh`** — they're standalone bootstrappers that can't assume the repo exists yet (install.sh) or still exists (teardown.sh). Their log vocabulary is narrower: `log_info`, `log_warn`, `log_error`, `log_step` only. **No `log_ok` or `log_skip`** — those live in `_lib.sh` and are only available to `bin/*.sh`. Reaching for them in install.sh/teardown.sh silently passes `bash -n` + `shellcheck` (they're valid function names, just undefined) and only fails at runtime with `command not found` — which `set -e` turns into a mid-phase crash. If you want a "success" tag in install.sh, use `log_info` with explicit phrasing ("Wrote …", "Installed …") and accept the color difference.
 - **Interactive scripts that support `curl … | bash` must reopen stdin from `/dev/tty`** before the first `read`. When curl-piped, bash inherits stdin from the (closed) download pipe; the self-elevate via `sudo -E bash "$tmp"` preserves that broken stdin. A `read` there gets empty input and silently fails the prompt. Both `install.sh::ensure_tty_stdin` and `teardown.sh::ensure_tty_stdin` implement the `[ -t 0 ] && return 0; exec < /dev/tty` pattern — copy that into any new bootstrap-style script, don't improvise.
+- **App backends live at `/srv/portal-apps/<name>/`** — sibling to the portal repo, never inside it. Each app is its own compose stack joined to the `external: true` `edge` network, with `container_name: <name>-backend` so nginx's upstream block can resolve it by name. The portal owns routing; the app stack owns its own lifecycle (volumes, env, healthcheck, optional `portal-app-<name>.service`). See "App backends (proxied apps)" under Architecture for the nginx hand-edit pattern and SSE-critical settings.
 
 ## Known limitations
 
