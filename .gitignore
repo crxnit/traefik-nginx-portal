@@ -6,6 +6,13 @@ traefik/certs/
 # whitelist domain, COMPOSE_PROFILES). Written by install.sh at mode 600.
 .env
 
+# Per-app operator-populated secrets and runtime data. Templates (*.example)
+# in apps/<name>/ are tracked; the operator's filled copies live at
+# /srv/portal-apps/<name>/ and never come back into the repo.
+apps/*/.env
+apps/*/certs/
+apps/*/uploads/
+
 # Generated per-site Traefik dynamic files; keep underscore-prefixed shared files
 traefik/dynamic/*.yml
 traefik/dynamic/*.yaml
