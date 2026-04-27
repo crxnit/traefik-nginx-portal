@@ -88,7 +88,21 @@ Sites can be protected behind Google Workspace sign-in (or, by reconfiguring the
 
 **ACME challenge path is safe.** LE HTTP-01 hits `http://<fqdn>/.well-known/acme-challenge/*` on the `web` (:80) entrypoint, which Traefik intercepts internally *before* any router runs. Auth never sees it. No extra configuration needed.
 
-**Adding a second provider later.** Naming is specific (`traefik-forward-auth-google`, `oauth-google-forward-auth@file`) rather than generic, so a second provider (e.g. Microsoft Entra ID, Okta) lands as a copy-paste-rename: new sidecar service, new `_oauth-<provider>.yml`, new middleware name. Sites pick which middleware to attach at provision time.
+**Adding a second OAuth client or provider.** Two cases land the same shape because the naming was made specific (`traefik-forward-auth-google`, `oauth-google-forward-auth@file`) rather than generic:
+
+1. *Same provider, different OAuth client.* Common when sites span more than one Google Workspace and each domain has its own OAuth client (different client ID/secret, different consent screen, different "Internal" Workspace user-type). The shared-`OAUTH_DOMAIN` model can't represent this without leaking access between sites.
+2. *Different provider.* Microsoft Entra ID, Okta, etc.
+
+Both land as a copy-paste-rename of the existing sidecar. Pick a short lowercase name (`acme`, `partner`, `microsoft` — used as a suffix throughout). Steps:
+
+1. **Add a sibling sidecar** in the top-level `docker-compose.yml`, copy of `traefik-forward-auth-google` with `container_name: traefik-forward-auth-<name>` and env-var references suffixed `_<UPPER_NAME>` (e.g. `OAUTH_PROVIDERS_GOOGLE_CLIENT_ID_ACME`). Same `profiles: [oauth]`, same `traefik` network membership.
+2. **Add the matching env vars** to `/srv/portal/.env` (mode 600): `OAUTH_PROVIDERS_GOOGLE_CLIENT_ID_<UPPER_NAME>`, `_SECRET_<UPPER_NAME>`, `OAUTH_SECRET_<UPPER_NAME>` (fresh `openssl rand -base64 32` — distinct from the default sidecar's), `OAUTH_DOMAIN_<UPPER_NAME>` (the email domain whitelist for *this* sidecar).
+3. **Add a sibling dynamic file** `traefik/dynamic/_oauth-<name>.yml` defining middleware `oauth-google-forward-auth-<name>` pointing at `http://traefik-forward-auth-<name>:4181`. Identical structure to `_oauth.yml`.
+4. **Restart Traefik** so compose picks up the new sidecar service (`systemctl restart portal-traefik`). The dynamic YAML is hot-reloaded but the new sidecar service in `docker-compose.yml` is not.
+5. **Provision sites against this sidecar** with `provision-site.sh --oauth-provider=<name>` (e.g. `provision-site.sh app.acme.com --oauth-provider=acme`). The flag attaches `oauth-google-forward-auth-<name>@file` to the per-site router instead of the default. `provision-site.sh` validates the name (lowercase alnum + hyphens, no leading/trailing hyphen, max 32 chars) and prints the correct redirect URI + the matching `.env` variable name in its "next steps" output.
+6. **Add the per-site redirect URI** `https://<fqdn>/_oauth` to *the right* OAuth client in Google Cloud Console (the one whose ID lives in the `_<UPPER_NAME>`-suffixed env var, not the default one).
+
+For provider 2 (different provider, e.g. Microsoft) the steps are identical but `provider:` in the sidecar config + the env-var names change to match the upstream forward-auth's expected vars (`PROVIDERS_OIDC_*`, `PROVIDERS_GENERIC_OAUTH_*`, etc.). The `oauth-google-forward-auth-<name>` middleware naming convention is intentionally retained so callers don't need to know which underlying provider a sidecar wraps.
 
 **What's NOT supported.** Provider chaining on a single site ("sign in with Google OR Microsoft") — traefik-forward-auth is one-provider-per-instance. Workflows that need that are Authelia/Dex/Keycloak territory.
 
