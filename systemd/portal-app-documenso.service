@@ -1,0 +1,22 @@
+[Unit]
+Description=Portal app — Documenso (e-sign)
+Documentation=https://github.com/crxnit/traefik-nginx-portal
+Requires=docker.service portal-nginx.service
+After=docker.service network-online.target portal-nginx.service
+Wants=network-online.target
+
+[Service]
+# Documenso lives sibling to the portal repo, NOT inside it.
+# Adjust APP_DIR and User if you installed under a different layout.
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/srv/portal-apps/documenso
+User=portal
+Group=portal
+ExecStart=/usr/bin/docker compose up -d
+ExecStop=/usr/bin/docker compose down
+# First start may pull the documenso image + run Prisma migrations.
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

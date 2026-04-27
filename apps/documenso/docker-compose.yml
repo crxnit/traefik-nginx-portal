@@ -1,0 +1,63 @@
+# Documenso — open-source e-sign app, fronted by the portal nginx + Traefik.
+#
+# This file is a template. At install time, copy the apps/documenso/ tree to
+# /srv/portal-apps/documenso/ (sibling to the portal repo, NOT inside it),
+# populate .env (see .env.example), drop the signing cert at certs/cert.p12,
+# then `docker compose up -d`. Routing into this stack is owned by the portal:
+# `portal provision-site sign.<your-domain>` then hand-edit conf.d/<fqdn>.conf
+# to proxy to documenso-backend:3000 (see nginx-site.conf.example).
+
+name: documenso
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: documenso-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - documenso-pg-data:/var/lib/postgresql/data
+    networks:
+      - documenso-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  documenso:
+    image: documenso/documenso:v2.9.1
+    container_name: documenso-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    volumes:
+      # Signing cert (PKCS#12). Generate with openssl, mode 600, gitignored.
+      - ./certs/cert.p12:/opt/documenso/cert.p12:ro
+    networks:
+      # `edge` lets the portal nginx reach this container by name.
+      # `documenso-internal` keeps the DB unreachable from other portal apps.
+      - edge
+      - documenso-internal
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+networks:
+  edge:
+    external: true
+  documenso-internal:
+    driver: bridge
+    internal: true
+
+volumes:
+  documenso-pg-data:
