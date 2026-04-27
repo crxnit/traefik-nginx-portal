@@ -31,6 +31,14 @@ services:
   documenso:
     image: documenso/documenso:v2.9.1
     container_name: documenso-backend
+    # Public FQDN, NOT the docker container name. nodemailer's default EHLO
+    # hostname is `os.hostname()`, which inside the container is the docker
+    # `container_name` — an un-resolvable string that strict SMTP relays
+    # (Google Workspace SMTP relay in particular) reject with a generic
+    # "421 4.7.0 Try again later, closing connection. (EHLO)". Pinning the
+    # container hostname to the public FQDN makes the EHLO trustworthy.
+    # Substituted from `sign.example.com` at staging time per README Step 1.
+    hostname: sign.example.com
     restart: unless-stopped
     depends_on:
       postgres:
