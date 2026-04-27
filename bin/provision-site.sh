@@ -11,7 +11,8 @@
 #
 # Usage:
 #   ./provision-site.sh <fqdn> [--spa] [--no-reload] [--traefik-dir <path>]
-#                              [--oauth] [--oauth-public=/a,/b,...]
+#                              [--oauth] [--oauth-provider=<name>]
+#                              [--oauth-public=/a,/b,...]
 #
 # Examples:
 #   ./provision-site.sh myapp.example.com
@@ -19,6 +20,7 @@
 #   ./provision-site.sh landing.example.com --traefik-dir /opt/traefik/dynamic
 #   ./provision-site.sh api.example.com --oauth
 #   ./provision-site.sh api.example.com --oauth --oauth-public=/healthz,/webhooks/
+#   ./provision-site.sh app.acme.com --oauth-provider=acme   # second sidecar
 
 set -euo pipefail
 
@@ -42,6 +44,12 @@ FQDN=""
 SPA_MODE=false
 DO_RELOAD=true
 OAUTH_MODE=false
+# OAUTH_PROVIDER selects which forward-auth sidecar's middleware to attach.
+# Empty = the default `oauth-google-forward-auth@file` (the original sidecar
+# defined in _oauth.yml). Non-empty = `oauth-google-forward-auth-<name>@file`,
+# which assumes the operator has stood up a sibling sidecar per CLAUDE.md
+# "Adding a second OAuth client" / "Adding a second provider later" pattern.
+OAUTH_PROVIDER=""
 OAUTH_PUBLIC_PATHS=""
 
 usage() {
@@ -53,6 +61,10 @@ Options:
   --no-reload                Skip nginx config test and reload
   --traefik-dir DIR          Override Traefik dynamic config directory
   --oauth                    Protect the whole site with OAuth (Google Workspace)
+  --oauth-provider=NAME      Use sibling forward-auth sidecar's middleware
+                             (oauth-google-forward-auth-NAME@file). Implies
+                             --oauth. Default attaches the original
+                             oauth-google-forward-auth@file.
   --oauth-public=/a,/b,...   Comma-separated PathPrefixes exempt from OAuth (implies --oauth)
   -h, --help                 Show this help
 
@@ -77,6 +89,11 @@ while [[ $# -gt 0 ]]; do
         --no-reload)        DO_RELOAD=false; shift ;;
         --traefik-dir)      TRAEFIK_DYNAMIC_DIR="$2"; shift 2 ;;
         --oauth)            OAUTH_MODE=true; shift ;;
+        # --oauth-provider=NAME (preferred) and --oauth-provider NAME both
+        # imply --oauth. NAME is the suffix on the sibling sidecar's middleware
+        # (oauth-google-forward-auth-NAME@file).
+        --oauth-provider=*) OAUTH_MODE=true; OAUTH_PROVIDER="${1#*=}"; shift ;;
+        --oauth-provider)   OAUTH_MODE=true; OAUTH_PROVIDER="$2"; shift 2 ;;
         # Accept both `--oauth-public=VAL` (preferred) and `--oauth-public VAL`
         --oauth-public=*)   OAUTH_MODE=true; OAUTH_PUBLIC_PATHS="${1#*=}"; shift ;;
         --oauth-public)     OAUTH_MODE=true; OAUTH_PUBLIC_PATHS="$2"; shift 2 ;;
@@ -118,6 +135,19 @@ if [[ -n "$OAUTH_PUBLIC_PATHS" ]]; then
             *'`'*) die "Public path cannot contain backticks: '$_path'" ;;
         esac
     done
+fi
+
+# --- OAuth provider name validation ---------------------------------------
+# NAME is interpolated into a Traefik middleware reference and (in the
+# next-steps message) into the operator-facing setup hint, so we restrict
+# to lowercase alphanumeric + hyphens, no leading/trailing hyphens, max 32
+# chars. Same character class the existing middleware names use; matches
+# the convention in _oauth-<name>.yml.
+if [[ -n "$OAUTH_PROVIDER" ]]; then
+    $OAUTH_MODE || die "--oauth-provider requires --oauth"
+    if [[ ! "$OAUTH_PROVIDER" =~ ^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$ ]]; then
+        die "Invalid --oauth-provider name: '$OAUTH_PROVIDER'. Must be lowercase alphanumeric with optional hyphens (no leading/trailing hyphens), max 32 chars."
+    fi
 fi
 
 acquire_portal_lock "$PORTAL_DIR"
@@ -264,8 +294,15 @@ if [[ -n "$TRAEFIK_FILE" ]]; then
     MIDDLEWARES="        - security-headers@file
         - rate-limit@file"
     if $OAUTH_MODE; then
+        # Default sidecar's middleware unless --oauth-provider=<name> picks
+        # a sibling sidecar (oauth-google-forward-auth-<name>@file).
+        if [[ -n "$OAUTH_PROVIDER" ]]; then
+            OAUTH_MIDDLEWARE="oauth-google-forward-auth-${OAUTH_PROVIDER}@file"
+        else
+            OAUTH_MIDDLEWARE="oauth-google-forward-auth@file"
+        fi
         MIDDLEWARES="${MIDDLEWARES}
-        - oauth-google-forward-auth@file"
+        - ${OAUTH_MIDDLEWARE}"
     fi
 
     # Dual-router mode: one high-priority "public" router for OAuth-exempt
@@ -351,9 +388,17 @@ echo "  - Verify DNS points $FQDN to this server"
 echo "  - Test: curl -I https://$FQDN"
 if $OAUTH_MODE; then
     echo
-    echo "  OAuth is enabled for this site. In the Google Cloud Console"
-    echo "  (console.cloud.google.com → Credentials → OAuth 2.0 Client),"
-    echo "  add this redirect URI to the client configured in .env:"
+    if [[ -n "$OAUTH_PROVIDER" ]]; then
+        echo "  OAuth is enabled for this site, using sidecar '${OAUTH_PROVIDER}'"
+        echo "  (middleware oauth-google-forward-auth-${OAUTH_PROVIDER}@file)."
+        echo "  In the Google Cloud Console for the '${OAUTH_PROVIDER}' OAuth client"
+        echo "  (whose ID is in .env as OAUTH_PROVIDERS_GOOGLE_CLIENT_ID_$(echo "$OAUTH_PROVIDER" | tr '[:lower:]-' '[:upper:]_')),"
+        echo "  add this redirect URI:"
+    else
+        echo "  OAuth is enabled for this site. In the Google Cloud Console"
+        echo "  (console.cloud.google.com → Credentials → OAuth 2.0 Client),"
+        echo "  add this redirect URI to the client configured in .env:"
+    fi
     echo
     echo "      https://${FQDN}/_oauth"
     echo
