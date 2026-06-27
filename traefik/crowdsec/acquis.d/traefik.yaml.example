@@ -1,0 +1,25 @@
+# =============================================================================
+# CrowdSec Traefik access-log acquisition — OPT-IN (ships as .example, inert).
+# =============================================================================
+# Behavioral detection (brute force, credential stuffing, path enumeration,
+# scanner/bot activity) by parsing Traefik's access log. This is SEPARATE from
+# AppSec/WAF (appsec.yaml) and is OFF until you:
+#
+#   1. Switch Traefik to file logging in traefik/traefik.yml:
+#        accessLog:
+#          filePath: /var/log/traefik/access.log
+#      and mount `./logs:/var/log/traefik` (rw) on the traefik service.
+#   2. Rename this file:  traefik.yaml.example -> traefik.yaml
+#   3. Restart the crowdsec service.
+#
+# CrowdSec only loads *.yaml / *.yml in acquis.d, so the .example suffix keeps
+# this inert until you opt in. See ../../CROWDSEC.md.
+# =============================================================================
+
+filenames:
+  - /var/log/traefik/access.log
+
+labels:
+  type: traefik
+
+source: file

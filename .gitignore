@@ -2,6 +2,10 @@
 traefik/acme.json
 traefik/certs/
 
+# CrowdSec bouncer LAPI key (operator-generated; read by the Traefik plugin via
+# crowdsecLapiKeyFile). Never commit — see CROWDSEC.md.
+traefik/crowdsec/lapi-key
+
 # Compose env + OAuth credentials (Google client ID/secret, cookie-signing key,
 # whitelist domain, COMPOSE_PROFILES). Written by install.sh at mode 600.
 .env

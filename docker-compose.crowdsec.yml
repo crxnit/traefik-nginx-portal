@@ -1,0 +1,82 @@
+# =============================================================================
+# CrowdSec AppSec/WAF overlay for traefik-portal — OPT-IN, off by default.
+# =============================================================================
+# Ported from the archived traefik-docker-hosting-2026 and adapted to this
+# stack: Traefik v3.3 file-provider, read-only rootfs, external `traefik`
+# network, no docker-socket-proxy. Full runbook: CROWDSEC.md.
+#
+# This is an ADDITIVE compose override — the base docker-compose.yml is left
+# untouched, so the default deployment is unchanged. Enable by including this
+# file in the compose invocation; the cleanest way that the existing systemd
+# unit picks up automatically is to set in .env:
+#
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.crowdsec.yml
+#   CROWDSEC_BOUNCER_API_KEY=<same value you write to traefik/crowdsec/lapi-key>
+#
+# then `sudo systemctl restart portal-traefik` (or `docker compose up -d`).
+# =============================================================================
+
+services:
+  # CrowdSec Security Engine: LAPI (:8080) + AppSec/WAF (:7422). Internal only —
+  # reachable by Traefik over the external `traefik` network, never published.
+  crowdsec:
+    image: crowdsecurity/crowdsec:latest
+    container_name: crowdsec
+    restart: unless-stopped
+    environment:
+      # Rule sets installed on first start. AppSec ones power the WAF; the
+      # traefik/http-cve scenarios fire once access-log acquisition is enabled.
+      COLLECTIONS: >-
+        crowdsecurity/traefik
+        crowdsecurity/http-cve
+        crowdsecurity/appsec-virtual-patching
+        crowdsecurity/appsec-generic-rules
+      # Pre-registers the bouncer with a known key so the Traefik plugin can
+      # authenticate without a manual `cscli bouncers add`. Must equal the value
+      # in traefik/crowdsec/lapi-key. Sourced from .env via compose substitution.
+      BOUNCER_KEY_traefik: "${CROWDSEC_BOUNCER_API_KEY:-}"
+    volumes:
+      - crowdsec_config:/etc/crowdsec
+      - crowdsec_data:/var/lib/crowdsec/data
+      - ./traefik/crowdsec/acquis.d:/etc/crowdsec/acquis.d:ro
+      # Optional behavioral detection: share Traefik's access log (requires
+      # switching accessLog to file mode — see CROWDSEC.md). Harmless if empty.
+      - ./logs:/var/log/traefik:ro
+    networks:
+      - traefik
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: 0.5
+    healthcheck:
+      test: ["CMD", "cscli", "version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Additive override of the base traefik service: give the read-only rootfs a
+  # writable spot for the downloaded bouncer plugin, and expose the LAPI key
+  # file. Both are no-ops until the plugin is declared in traefik.yml, so this
+  # override is safe to include before CrowdSec is fully wired.
+  traefik:
+    volumes:
+      - traefik_plugins:/plugins-storage
+      - ./traefik/crowdsec:/etc/traefik/crowdsec:ro
+
+networks:
+  # Same external network the base stack uses; crowdsec joins it so Traefik can
+  # resolve `crowdsec:8080` / `crowdsec:7422` by container name.
+  traefik:
+    name: traefik
+    external: true
+
+volumes:
+  crowdsec_config:
+  crowdsec_data:
+  traefik_plugins:

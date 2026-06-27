@@ -76,3 +76,29 @@ log:
   level: INFO
 
 accessLog: {}
+
+# =============================================================================
+# CrowdSec AppSec/WAF bouncer plugin — OPT-IN, disabled by default.
+# =============================================================================
+# Uncomment to enable IP-reputation + AppSec/WAF via the CrowdSec Security
+# Engine. Requires the crowdsec service (docker-compose.crowdsec.yml) and the
+# _crowdsec.yml middlewares. Full runbook: CROWDSEC.md.
+#
+# Declaring the plugin makes Traefik download + compile it at startup, so the
+# container needs egress and a writable /plugins-storage (the traefik_plugins
+# volume in docker-compose.crowdsec.yml provides it under the read-only rootfs).
+# Leave commented until every CrowdSec enablement step is done, or Traefik will
+# fail to start.
+#
+# experimental:
+#   plugins:
+#     bouncer:
+#       moduleName: github.com/maxlerebourg/crowdsec-bouncer-traefik-plugin
+#       version: v1.4.7
+#
+# Optional behavioral detection (brute-force/scanners) needs the access log as a
+# file. Replace `accessLog: {}` above with:
+#   accessLog:
+#     filePath: /var/log/traefik/access.log
+# and mount ./logs:/var/log/traefik (rw) on traefik. AppSec/WAF alone does not
+# need this.

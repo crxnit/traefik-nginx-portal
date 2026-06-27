@@ -1,0 +1,20 @@
+# =============================================================================
+# CrowdSec AppSec (WAF) acquisition — ported from traefik-docker-hosting-2026.
+# =============================================================================
+# Enables the Application Security (WAF) component. Listens on :7422 for
+# requests forwarded by the Traefik bouncer plugin and applies the AppSec
+# rule sets pulled in by the COLLECTIONS env (virtual-patching + generic-rules).
+#
+# Protects against: SQL injection, XSS, path traversal, RCE attempts, and
+# known-CVE exploitation (virtual patching). Requires NO Traefik access log.
+# =============================================================================
+
+appsec_configs:
+  - crowdsecurity/appsec-default
+
+labels:
+  type: appsec
+
+listen_addr: 0.0.0.0:7422
+
+source: appsec
