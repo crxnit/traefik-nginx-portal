@@ -38,6 +38,10 @@ archive/
 .portal.lock
 logs/
 
+# Operator scratch: cert passphrases and session notes. Never commit.
+documenso_cert.txt
+session_notes_*.txt
+
 # OS / editor cruft
 .DS_Store
 *.swp
