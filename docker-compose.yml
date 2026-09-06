@@ -147,6 +147,52 @@ services:
     cpus: 0.25
     restart: unless-stopped
 
+  # Second Google forward-auth sidecar, restricted to specific ADDRESSES rather
+  # than a whole domain. The -google one above is DOMAIN-scoped and admits any
+  # Google account, which several sites depend on -- so tightening it in place
+  # was not an option. Attached via provision-site.sh --oauth-provider=jjoc
+  # (middleware oauth-google-forward-auth-jjoc@file, see
+  # traefik/dynamic/_oauth-jjoc.yml).
+  #
+  # First consumer: mail.jjocapps.com, which fronts a tool that can trash mail.
+  #
+  # WARNING: traefik-forward-auth treats "no WHITELIST and no DOMAIN" as
+  # allow-everyone (internal/auth.go ValidateEmail). A typo in OAUTH_WHITELIST_JJOC
+  # therefore fails OPEN, not closed. Verify after any change:
+  #   docker compose exec traefik-forward-auth-jjoc env | grep WHITELIST
+  # Apps behind it should also check X-Forwarded-User themselves.
+  traefik-forward-auth-jjoc:
+    image: ghcr.io/crxnit/traefik-forward-auth:v1.0.1-src.v2.3.0
+    container_name: traefik-forward-auth-jjoc
+    profiles:
+      - oauth
+    networks:
+      - traefik
+    environment:
+      # Same Google OAuth client as the -google sidecar is fine (the client just
+      # identifies the app to Google); the redirect URI for each protected host
+      # -- https://<fqdn>/_oauth -- must be registered on whichever client is used.
+      PROVIDERS_GOOGLE_CLIENT_ID: "${OAUTH_PROVIDERS_GOOGLE_CLIENT_ID_JJOC:-${OAUTH_PROVIDERS_GOOGLE_CLIENT_ID:-}}"
+      PROVIDERS_GOOGLE_CLIENT_SECRET: "${OAUTH_PROVIDERS_GOOGLE_CLIENT_SECRET_JJOC:-${OAUTH_PROVIDERS_GOOGLE_CLIENT_SECRET:-}}"
+      # Its OWN cookie-signing key, so a session minted by another sidecar is
+      # not valid here: openssl rand -base64 32
+      SECRET: "${OAUTH_SECRET_JJOC:-}"
+      # Comma-separated exact addresses. Leave DOMAIN unset: with a whitelist
+      # present and MATCH_WHITELIST_OR_DOMAIN off, only these addresses pass.
+      WHITELIST: "${OAUTH_WHITELIST_JJOC:-}"
+      INSECURE_COOKIE: "false"
+      LOG_LEVEL: "info"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 128m
+    cpus: 0.25
+    restart: unless-stopped
+
 networks:
   traefik:
     name: traefik
