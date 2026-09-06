@@ -117,6 +117,36 @@ services:
     # includes a busybox-style wget, at which point this can be wired.
     restart: unless-stopped
 
+  # Second OAuth sidecar — sofisminidonuts.com Workspace OAuth client.
+  # Sibling of traefik-forward-auth-google; copy-paste-rename pattern
+  # documented in CLAUDE.md "Adding a second provider later". Lets
+  # walmart.sofisminidonuts.com be auth-gated by sofis users only,
+  # without conflating with jjocllc's existing whitelist.
+  traefik-forward-auth-sofis:
+    image: ghcr.io/crxnit/traefik-forward-auth:v1.0.1-src.v2.3.0
+    container_name: traefik-forward-auth-sofis
+    profiles:
+      - oauth
+    networks:
+      - traefik
+    environment:
+      PROVIDERS_GOOGLE_CLIENT_ID: "${OAUTH_PROVIDERS_GOOGLE_CLIENT_ID_SOFIS:-}"
+      PROVIDERS_GOOGLE_CLIENT_SECRET: "${OAUTH_PROVIDERS_GOOGLE_CLIENT_SECRET_SOFIS:-}"
+      SECRET: "${OAUTH_SECRET_SOFIS:-}"
+      DOMAIN: "${OAUTH_DOMAIN_SOFIS:-}"
+      INSECURE_COOKIE: "false"
+      LOG_LEVEL: "info"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 128m
+    cpus: 0.25
+    restart: unless-stopped
+
 networks:
   traefik:
     name: traefik
