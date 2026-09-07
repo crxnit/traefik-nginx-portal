@@ -1,0 +1,13 @@
+# OAuth (Google Workspace) forward-auth middleware — sofisminidonuts.com client.
+# Sibling of _oauth.yml; points at the traefik-forward-auth-sofis sidecar.
+# Sites opt into this middleware (instead of oauth-google-forward-auth@file) by
+# referencing oauth-google-forward-auth-sofis@file in their per-site router YAML.
+
+http:
+  middlewares:
+    oauth-google-forward-auth-sofis:
+      forwardAuth:
+        address: "http://traefik-forward-auth-sofis:4181"
+        trustForwardHeader: true
+        authResponseHeaders:
+          - X-Forwarded-User
