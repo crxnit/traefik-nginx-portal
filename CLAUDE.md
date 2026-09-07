@@ -104,6 +104,34 @@ Both land as a copy-paste-rename of the existing sidecar. Pick a short lowercase
 
 For provider 2 (different provider, e.g. Microsoft) the steps are identical but `provider:` in the sidecar config + the env-var names change to match the upstream forward-auth's expected vars (`PROVIDERS_OIDC_*`, `PROVIDERS_GENERIC_OAUTH_*`, etc.). The `oauth-google-forward-auth-<name>` middleware naming convention is intentionally retained so callers don't need to know which underlying provider a sidecar wraps.
 
+There is a third case the two above don't cover: *same provider, same OAuth
+client, but access restricted to specific **addresses** rather than a whole
+domain.* Set `WHITELIST` (comma-separated exact addresses) instead of `DOMAIN`
+on the sibling sidecar. With a whitelist present and `MATCH_WHITELIST_OR_DOMAIN`
+off, only those addresses pass. The client ID/secret can fall through to the
+default sidecar's — the OAuth client only identifies the app to Google; access
+control lives in the sidecar's config.
+
+⚠️ **An unset allowlist fails OPEN.** `ValidateEmail` (`internal/auth.go`)
+returns `true` when `WHITELIST` **and** `DOMAIN` are both empty — a sidecar with
+a typo'd or missing env var admits every Google account rather than none.
+Nothing warns you. After any change to a sidecar's config, confirm what it
+actually received:
+
+```bash
+docker compose exec traefik-forward-auth-<name> env | grep -E 'WHITELIST|DOMAIN'
+```
+
+Apps behind an address-restricted sidecar should also check the forwarded
+`X-Forwarded-User` against their own allowlist, so a misconfiguration here is
+caught rather than silently opening the app.
+
+**Live sidecars.** `traefik-forward-auth-google` (DOMAIN-scoped, admits any
+account in the configured domains) and `traefik-forward-auth-jjoc`
+(`OAUTH_WHITELIST_JJOC`, single address; first consumer `mail.jjocapps.com`,
+which fronts a tool that can trash a mailbox — hence the address-level
+restriction and the app-side re-check).
+
 **What's NOT supported.** Provider chaining on a single site ("sign in with Google OR Microsoft") — traefik-forward-auth is one-provider-per-instance. Workflows that need that are Authelia/Dex/Keycloak territory.
 
 ### Wildcard certs (per-tenant subdomains)

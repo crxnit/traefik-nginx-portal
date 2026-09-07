@@ -1,0 +1,26 @@
+# OAuth (Google) forward-auth middleware — `jjoc` sidecar.
+#
+# Sibling of _oauth.yml, following the naming convention provision-site.sh
+# expects for --oauth-provider=NAME: oauth-google-forward-auth-<name>@file,
+# backed by a traefik-forward-auth-<name> container.
+#
+# Why a second sidecar rather than reusing the shared one: the `google` sidecar
+# is configured with DOMAIN only, so it admits ANY Google account and several
+# sites rely on that. This one is configured with WHITELIST — a specific list of
+# addresses — so rejection happens at the edge rather than in each app.
+#
+# Points at the traefik-forward-auth-jjoc service in the top-level
+# docker-compose.yml, profile "oauth". If that sidecar is not running, routers
+# referencing this middleware will 502/503 (expected — don't attach it until
+# OAUTH_*_JJOC is configured in .env).
+
+http:
+  middlewares:
+    oauth-google-forward-auth-jjoc:
+      forwardAuth:
+        address: "http://traefik-forward-auth-jjoc:4181"
+        trustForwardHeader: true
+        # Forwarded to the backend so apps can read (and re-check) the
+        # authenticated identity.
+        authResponseHeaders:
+          - X-Forwarded-User
