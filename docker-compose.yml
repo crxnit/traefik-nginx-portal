@@ -10,6 +10,10 @@ services:
       - ./traefik/dynamic/:/etc/traefik/dynamic/:ro
       - ./traefik/certs/:/etc/traefik/certs/:ro
       - ./traefik/acme.json:/acme.json
+      # access log (accessLog.filePath in traefik.yml) — rw, the one writable
+      # path besides acme.json under read_only. Rotated on the host by
+      # logrotate/traefik-access, installed to /etc/logrotate.d/.
+      - ./logs/traefik/:/var/log/traefik/
     environment:
       # Route53 DNS-01 credentials for the letsencrypt-dns resolver. Empty
       # when only HTTP-01 sites are deployed; lego skips DNS challenges
