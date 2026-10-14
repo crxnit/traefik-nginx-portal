@@ -229,6 +229,7 @@ systemctl status  portal-nginx portal-traefik
 systemctl restart portal-traefik           # nginx has Requires= so starting traefik starts nginx
 systemctl stop    portal-traefik portal-nginx
 journalctl -u portal-traefik -f            # live logs (compose logs still work too)
+tail -f /srv/portal/logs/traefik/access.log # access log (file since 2026-10-14; 30 days, logrotate/traefik-access)
 
 # Direct-invocation forms — used locally or when developing bin/ scripts.
 ./bin/menu.sh

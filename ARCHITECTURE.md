@@ -330,7 +330,7 @@ Both containers run hardened:
 - `mem_limit: 256m`, `cpus: 0.5`
 - Healthcheck on internal `/ping` (port 8082, not exposed)
 - TLS 1.2+ with explicit cipher suite list (see `traefik.yml`)
-- `accessLog: {}` → Docker log driver
+- Access log → file `./logs/traefik/access.log` (bind mount, rw), 30 days via `logrotate/traefik-access` + USR1 reopen. Traefik's own log (`log:`) still goes to the Docker log driver
 
 **nginx:**
 - `read_only: true` root FS with tmpfs carve-outs for `/var/cache/nginx`, `/var/run`, `/tmp`

@@ -75,7 +75,13 @@ certificatesResolvers:
 log:
   level: INFO
 
-accessLog: {}
+# Access log to a FILE, not stdout. On stdout it rode the host's journald, whose
+# shared 4 GB cap is filled by kernel audit events in ~2 days, so incident
+# lookback was ~2 days. As a file, retention is logrotate's alone: 30 days, see
+# logrotate/traefik-access. Rotation moves the file and sends USR1; Traefik
+# reopens it. Default fields: no request headers, so Authorization never lands.
+accessLog:
+  filePath: /var/log/traefik/access.log
 
 # =============================================================================
 # CrowdSec AppSec/WAF bouncer plugin — OPT-IN, disabled by default.
@@ -97,8 +103,6 @@ accessLog: {}
 #       version: v1.4.7
 #
 # Optional behavioral detection (brute-force/scanners) needs the access log as a
-# file. Replace `accessLog: {}` above with:
-#   accessLog:
-#     filePath: /var/log/traefik/access.log
-# and mount ./logs:/var/log/traefik (rw) on traefik. AppSec/WAF alone does not
-# need this.
+# file. That is already the case (accessLog.filePath above, mounted from
+# ./logs/traefik): point the CrowdSec acquisition at
+# /srv/portal/logs/traefik/access.log. AppSec/WAF alone does not need it.

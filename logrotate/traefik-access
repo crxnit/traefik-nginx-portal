@@ -1,0 +1,23 @@
+# Install: sudo install -o root -g root -m 0644 logrotate/traefik-access /etc/logrotate.d/traefik-access
+# Test:    sudo logrotate -d /etc/logrotate.d/traefik-access
+#
+# Traefik's access log (traefik.yml accessLog.filePath, bind-mounted from
+# ./logs/traefik). 30 days at roughly 4 MB/day uncompressed. logrotate renames
+# the file and then sends USR1; Traefik v3 reopens its log files on USR1, so
+# no copytruncate (which can drop lines) and no restart.
+#
+# logrotate does no shell expansion: the path below is literal. Change it if
+# the portal is not installed at /srv/portal.
+/srv/portal/logs/traefik/access.log {
+    daily
+    rotate 30
+    dateext
+    compress
+    delaycompress
+    missingok
+    notifempty
+    su root root
+    postrotate
+        /usr/bin/docker kill --signal=USR1 traefik >/dev/null 2>&1 || true
+    endscript
+}
