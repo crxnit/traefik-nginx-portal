@@ -22,7 +22,9 @@ entryPoints:
     transport:
       respondingTimeouts:
         readTimeout: 30s
-        writeTimeout: 30s
+        # Caps the WHOLE response, so it must outlast a long SSE stream (an LLM
+        # chat reply can wait minutes for a GPU cold start). 30s cut those.
+        writeTimeout: 660s
         idleTimeout: 120s
 
 tls:

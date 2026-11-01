@@ -13,7 +13,8 @@ History before 2026-10-19: `.claude/archive/CLAUDE.20261019-233000.md` (local on
 ## Architecture
 
 Two independent compose stacks meeting on shared Docker networks `traefik` + `edge` (both `external: true`; must exist first):
-- `docker-compose.yml` — Traefik `traefik:v3.3.4` (patch-pinned) on `traefik` + `edge`, ports 80/443, internal `:8082/ping` entrypoint for the healthcheck. Static config `traefik/traefik.yml`; watches `traefik/dynamic/`. LE HTTP-01; certs in `traefik/acme.json` (bind mount; writable even with `read_only: true`).
+- `docker-compose.yml` — Traefik `traefik:v3.7.17` (patch-pinned) on `traefik` + `edge`, ports 80/443, internal `:8082/ping` entrypoint for the healthcheck. Static config `traefik/traefik.yml`; watches `traefik/dynamic/`. LE HTTP-01; certs in `traefik/acme.json` (bind mount; writable even with `read_only: true`).
+- `docker-compose.override.yml` (host-only, gitignored, auto-loaded by `docker compose`/systemd): per-host additions. On the production host it adds the `admitly` network to Traefik (admitly.io's app shares it with Traefik only).
 - `nginx/docker-compose.yml` — `nginx:1.27-alpine` (minor-pinned) on `edge` only, no host ports. Hardened: `read_only` root FS, `cap_drop ALL`, `no-new-privileges`, tmpfs `/var/cache/nginx`, `/var/run`, `/tmp`. Healthcheck `http://127.0.0.1/` (served by `00-default.conf` catchall).
 - **nginx logging under `read_only`:** `access_log /var/log/nginx/access.log` / `error_log /var/log/nginx/error.log` work only because the image symlinks them to `/dev/stdout`/`/dev/stderr`. **Don't add any other log paths in `conf.d/*.conf`** — nginx fails to start creating them. For on-disk per-site logs: bind-mount `./logs:/var/log/nginx` *and* drop `read_only: true` (+ logrotate).
 - `bin/bootstrap.sh` once per host (safe to re-run): `create-docker-networks.sh` → `acme.json` preflight (touch + chmod 600) → `ensure-default-tls.sh`. Verify with `bin/verify-networks.sh` (expects `traefik → edge,traefik`, `nginx → edge`).
@@ -123,7 +124,7 @@ Path-split sites: static at `/`, reverse-proxy a prefix (e.g. `/api/`) to a back
   - `proxy_read_timeout 1h` / `proxy_send_timeout 1h` — 60s defaults truncate long streams.
   - `proxy_http_version 1.1` + `proxy_set_header Connection ""` — upstream keepalive (with `upstream { ... keepalive 32; }`).
   - `proxy_ignore_client_abort on` — with a detached upstream pump (admitly's FastAPI tees vLLM deltas into an asyncio queue), persistence completes if the tab closes.
-- Traefik needs no SSE changes: v3 auto-flushes `text/event-stream` (ignores `flushInterval`); `websecure` `respondingTimeouts.writeTimeout` and `serversTransport.forwardingTimeouts.responseHeaderTimeout` default `0`. Generated dynamic file is fine unchanged.
+- Traefik and SSE: v3 auto-flushes `text/event-stream` (ignores `flushInterval`), and the generated dynamic file is fine unchanged. But `websecure` `respondingTimeouts.writeTimeout` caps the whole response: it was `30s` here (cut admitly.io chat streams during GPU cold starts) and is `660s` since 2026-11-01. `serversTransport.forwardingTimeouts.responseHeaderTimeout` defaults to `0`.
 - `--oauth` covers the API too; if the backend does its own auth, add `--oauth-public=/api/`.
 - `deprovision-site.sh` removes the three artifacts by filename only; `docker compose down` + `rm -rf` the backend stack separately.
 
