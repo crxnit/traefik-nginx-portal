@@ -31,7 +31,7 @@ The design goal is: **adding or removing a site should be one command, always sa
   │                                                                  │
   │   ┌────────────────────────────────┐                             │
   │   │  traefik container             │                             │
-  │   │  image: traefik:v3.3.4         │                             │
+  │   │  image: traefik:v3.7.17        │                             │
   │   │  - terminates TLS (:443)       │                             │
   │   │  - HTTP→HTTPS redirect (:80)   │                             │
   │   │  - ACME (Let's Encrypt HTTP-01)│                             │
@@ -342,7 +342,7 @@ Both containers run hardened:
 Under `read_only: true`, nginx can only write to logs because the `nginx:alpine` image ships `/var/log/nginx/access.log` → `/dev/stdout` and `/var/log/nginx/error.log` → `/dev/stderr` as symlinks. Any new `access_log` path introduced in `conf.d/*.conf` that isn't one of those symlinks will fail at nginx startup with `EROFS`. This is why `provision-site.sh` generates server blocks without per-site log paths — everything flows through the global stdout/stderr.
 
 **Image pinning:**
-- `traefik:v3.3.4` (patch-pinned within the 3.3 minor line)
+- `traefik:v3.7.17` (patch-pinned within the 3.7 minor line)
 - `nginx:1.27-alpine` (minor-pinned)
 
 Neither is digest-pinned. If full reproducibility is needed, append `@sha256:...` to the image refs.

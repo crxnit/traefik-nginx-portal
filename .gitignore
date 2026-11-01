@@ -48,3 +48,7 @@ session_notes_*.txt
 
 # Claude Code local session state
 .claude/
+
+# Host-only compose additions (e.g. an extra network one app shares only with
+# Traefik). `docker compose` and the systemd unit load it automatically.
+docker-compose.override.yml
