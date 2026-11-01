@@ -23,8 +23,9 @@ entryPoints:
       respondingTimeouts:
         readTimeout: 30s
         # Caps the WHOLE response, so it must outlast a long SSE stream (an LLM
-        # chat reply can wait minutes for a GPU cold start). 30s cut those.
-        writeTimeout: 660s
+        # chat reply can wait minutes for a GPU cold start). 30s cut those; 300s fits the
+        # observed cold starts (166-238 s) and the app's client recovers from a longer one.
+        writeTimeout: 300s
         idleTimeout: 120s
 
 tls:

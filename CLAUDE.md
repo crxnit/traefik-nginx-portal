@@ -124,7 +124,7 @@ Path-split sites: static at `/`, reverse-proxy a prefix (e.g. `/api/`) to a back
   - `proxy_read_timeout 1h` / `proxy_send_timeout 1h` — 60s defaults truncate long streams.
   - `proxy_http_version 1.1` + `proxy_set_header Connection ""` — upstream keepalive (with `upstream { ... keepalive 32; }`).
   - `proxy_ignore_client_abort on` — with a detached upstream pump (admitly's FastAPI tees vLLM deltas into an asyncio queue), persistence completes if the tab closes.
-- Traefik and SSE: v3 auto-flushes `text/event-stream` (ignores `flushInterval`), and the generated dynamic file is fine unchanged. But `websecure` `respondingTimeouts.writeTimeout` caps the whole response: it was `30s` here (cut admitly.io chat streams during GPU cold starts) and is `660s` since 2026-11-01. `serversTransport.forwardingTimeouts.responseHeaderTimeout` defaults to `0`.
+- Traefik and SSE: v3 auto-flushes `text/event-stream` (ignores `flushInterval`), and the generated dynamic file is fine unchanged. But `websecure` `respondingTimeouts.writeTimeout` caps the whole response: it was `30s` here (cut admitly.io chat streams during GPU cold starts) and was `660s` for a few hours on 2026-11-01 and is now `300s` (fits observed cold starts of 166-238 s; the app's client recovers from longer ones, and it halves how long a slow-reading client can hold a connection). `serversTransport.forwardingTimeouts.responseHeaderTimeout` defaults to `0`.
 - `--oauth` covers the API too; if the backend does its own auth, add `--oauth-public=/api/`.
 - `deprovision-site.sh` removes the three artifacts by filename only; `docker compose down` + `rm -rf` the backend stack separately.
 
