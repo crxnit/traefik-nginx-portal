@@ -1,9 +1,13 @@
 [Unit]
 Description=Portal — Traefik edge (TLS termination + per-site routing)
 Documentation=https://github.com/crxnit/traefik-nginx-portal
-Requires=docker.service portal-nginx.service
+# Wants, not Requires, docker.service: Requires passes a docker restart on to
+# this unit (ExecStop = compose down), so every unattended Docker upgrade took
+# the stack down despite live-restore (2026-11-02, 2026-11-04). After= keeps
+# the boot order.
+Requires=portal-nginx.service
 After=docker.service network-online.target portal-nginx.service
-Wants=network-online.target
+Wants=docker.service network-online.target
 
 [Service]
 # Placeholders substituted at install time by install.sh:
