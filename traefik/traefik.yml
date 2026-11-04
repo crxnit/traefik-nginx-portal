@@ -5,11 +5,20 @@ ping:
   entryPoint: ping
 
 entryPoints:
+  # Drop request headers whose names alias another (X_Forwarded_User or
+  # X.Forwarded.User for X-Forwarded-User): CGI/WSGI/PHP/nginx backends read
+  # them as the real header, so a client could spoof what Traefik and the
+  # forward-auth middlewares set. delete, not reject: a surprise costs a
+  # header, not a page. Census 2026-11-01/02 (41k requests, all hosts): no
+  # real traffic sends such names.
   ping:
     address: ":8082"
+    http:
+      aliasHeadersStrategy: delete
   web:
     address: ":80"
     http:
+      aliasHeadersStrategy: delete
       redirections:
         entryPoint:
           to: websecure
@@ -17,6 +26,7 @@ entryPoints:
   websecure:
     address: ":443"
     http:
+      aliasHeadersStrategy: delete
       tls:
         options: default
     transport:
