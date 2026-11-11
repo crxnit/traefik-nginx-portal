@@ -140,6 +140,9 @@ services:
       DOMAIN: "${OAUTH_DOMAIN_SOFIS:-}"
       INSECURE_COOKIE: "false"
       LOG_LEVEL: "info"
+      # 30-day sign-in (default 12 h) so the installed catering app on the
+      # owners' iPhones doesn't ask for Google twice a day (2026-11-11).
+      LIFETIME: "2592000"
     security_opt:
       - no-new-privileges:true
     cap_drop:
